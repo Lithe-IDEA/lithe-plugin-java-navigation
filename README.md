@@ -16,7 +16,7 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 跳转到定义 | 类型、方法、构造器、字段、枚举常量、局部变量、参数、类型参数、注解及其属性；按导入、同包、通配导入、嵌套、继承链和调用参数个数解析，支持调用链 `a.b().c` |
+| 跳转到定义 | 类型、方法、构造器、字段、枚举常量、局部变量、参数、类型参数、注解及其属性；按导入、同包、通配导入、嵌套、继承链、调用参数个数和实参类型解析，支持调用链 `a.b().c` 和 `Foo.<T>bar()` |
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
 | 查找引用 | 只列出能跳回这个声明的出现，所以列表和在任一行上跳转的结果一致；`package`/`import` 不算引用 |
@@ -47,6 +47,30 @@
 
 查找引用 20 次，p50 约 56 ms，最慢 0.13 s。
 
+### 和 JDT LS 对比跳转目标
+
+在 Nacos 上用同样的取样方式取 3 组、每组 1500 个位置，同时问 JDT LS（Maven 导入完成后）和本插件，比较跳到的文件和行
+（跳进 JDK 的按类比较，因为两边的 JDK 版本和源码不一定相同）：
+
+| 结果 | 种子 2 | 种子 7 | 种子 11 |
+| --- | --- | --- | --- |
+| 两边跳到同一处（项目内） | 1099 | 1071 | 1086 |
+| 两边跳到 JDK 的同一个类 | 326 | 337 | 327 |
+| 两边都没有结果 | 8 | 14 | 17 |
+| 只有 JDT LS 能跳：依赖库 | 59 | 72 | 64 |
+| 只有 JDT LS 能跳：项目内或 JDK | 8 | 3 | 5 |
+| 只有本插件能跳 | 0 | 2 | 0 |
+| 两边都跳了但不一样 | 0 | 1 | 1 |
+
+“两边都跳了但不一样”的两处都不是跳错：`org.xml.sax.Attributes` 本身就在 JDK 里（JDT LS 把它当成依赖库），
+`Properties.putAll` 是 JDK 9 起才有的重写（这个模块用 JDK 8 编译，JDT LS 跳到 `Hashtable.putAll`，本插件读的是 JDK 17）。
+只有 JDT LS 能跳的项目内位置是 `target/generated-sources` 里 protobuf 生成的类、泛型推断（`list.get(i).getName()`）
+和依赖库类型继承来的方法（`e.getMessage()`，`e` 的类型来自 Spring）。
+
+对比中发现并已修复的问题：参数个数相同的重载取了第一个（`new AccessException("...")` 跳到了 `AccessException(int)`），
+显式类型实参调用 `RestResult.<T>builder()`、限定名注解 `@ExtractorManager.Extractor(...)` 和可变参数参数
+`String... keys` 跳不了。
+
 宿主联调：用 Lithe 桌面端固定的 Rust Core（`47c9859`）校验 `plugin.json`、规划 `packaged` 启动、经 Core 启动语言服务器，
 会话进入 `ready` 并声明 `definition`、`references`、`documentSymbols`，三种请求都返回正确位置；跳进 JDK 时只在 `${stateDir}`
 写入解压副本，插件包文件的 SHA-256 前后一致。ruoyi-vue-pro 跳不了的几乎全是依赖库的注解和它们的属性：
@@ -57,7 +81,8 @@ Swagger 的 `@Schema(description, example, requiredMode)`、Lombok 的 `@Data`�
 
 - **不读依赖库**：Spring、MyBatis、Lombok、Swagger 等依赖里的声明找不到（返回“没有定义”，不会跳错）。
   计划：从 Maven/Gradle 插件取 classpath，按需读取 `sources.jar`，没有源码时显示只有签名的存根。
-- **没有类型推断**：重载只按参数个数选择；lambda 参数的类型和泛型替换后的返回类型推不出来，
+- **没有类型推断**：重载先按参数个数选，个数相同时按实参里写得出来的类型挑（字面量、强转、`new` 表达式、
+  变量和字段声明的类型、能跟下去的调用链），都看不出时取第一个；lambda 参数的类型和泛型替换后的返回类型推不出来，
   例如 `list.get(0).getName()` 里的 `getName`、`users.stream().map(u -> u.getName())` 里的 `getName`；
   以字面量为限定符的调用（`"".trim()`）也推不出类型。
 - **只认一个 JDK**：用的是上面顺序找到的 JDK，不一定是项目编译用的版本。

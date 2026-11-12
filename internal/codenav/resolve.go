@@ -215,7 +215,7 @@ func (q *qctx) resolveAt(ti int) []hit {
 			if at == nil {
 				return nil
 			}
-			return q.mloc(q.findMethod(at, name, 0), "annotation-attr")
+			return q.mloc(q.findMethod(at, name, call{ar: 0, open: -1}), "annotation-attr")
 		}
 	}
 	if p.is(ti-1, "case") || p.is(ti-1, ",") && q.inCaseLabel(ti) {
@@ -225,10 +225,11 @@ func (q *qctx) resolveAt(ti int) []hit {
 			}
 		}
 	}
+	dot := q.qualifierDot(ti)
 	switch {
-	case p.is(ti-1, ".") || p.is(ti-1, "::"):
-		ref := p.is(ti-1, "::")
-		ot := q.typeOfExpr(ti-2, ctx)
+	case dot >= 0:
+		ref := p.is(dot, "::")
+		ot := q.typeOfExpr(dot-1, ctx)
 		if ot == nil {
 			// A package-qualified type name: com.foo.Bar
 			if t := q.qualifiedType(ti); t != nil {
@@ -236,23 +237,26 @@ func (q *qctx) resolveAt(ti int) []hit {
 			}
 			return nil
 		}
+		if q.annotationName(dot) { // @Outer.Inner (Lithe addition)
+			return q.loc(q.findNested(ot, name), "annotation")
+		}
 		if isCall && q.afterNew(ti) {
-			if c := q.pickCtor(ot, q.callArity(ti+1)); c != nil && ot.Name == name {
+			if c := q.pickCtor(ot, q.callAt(ti+1)); c != nil && ot.Name == name {
 				return q.mloc(c, "ctor")
 			}
 			if t := q.findNested(ot, name); t != nil {
-				if c := q.pickCtor(t, q.callArity(ti+1)); c != nil {
+				if c := q.pickCtor(t, q.callAt(ti+1)); c != nil {
 					return q.mloc(c, "ctor")
 				}
 				return q.loc(t, "new-type")
 			}
 		}
 		if isCall || ref {
-			ar := -1
+			c := noCall
 			if isCall {
-				ar = q.callArity(ti + 1)
+				c = q.callAt(ti + 1)
 			}
-			if m := q.findMethod(ot, name, ar); m != nil {
+			if m := q.findMethod(ot, name, c); m != nil {
 				return q.mloc(m, "member-call")
 			}
 			return nil
@@ -274,13 +278,13 @@ func (q *qctx) resolveAt(ti int) []hit {
 			if p.is(open, "<") {
 				open = p.skipBalanced(open)
 			}
-			if c := q.pickCtor(t, q.callArity(open)); c != nil {
+			if c := q.pickCtor(t, q.callAt(open)); c != nil {
 				return q.mloc(c, "ctor")
 			}
 		}
 		return q.loc(t, "new-type")
 	case isCall:
-		if m := q.methodInScope(name, q.callArity(ti+1), ctx); m != nil {
+		if m := q.methodInScope(name, q.callAt(ti+1), ctx); m != nil {
 			return q.mloc(m, "call")
 		}
 		return nil
@@ -637,7 +641,8 @@ func (q *qctx) builderOf(t *Type) *Type {
 	return b
 }
 
-func (q *qctx) findMethod(t *Type, name string, ar int) *Member {
+func (q *qctx) findMethod(t *Type, name string, c call) *Member {
+	ar := c.ar
 	// Members of a synthetic @Builder type: one setter per field, and build().
 	if t.Outer != nil && q.builders[t.Outer] == t {
 		owner := t.Outer
@@ -650,18 +655,22 @@ func (q *qctx) findMethod(t *Type, name string, ar int) *Member {
 		return nil
 	}
 	var first *Member
+	var fits []*Member
 	h := q.hierarchy(t)
 	for _, ht := range h {
 		for _, m := range ht.Members {
 			if m.Kind == kMethod && m.Name == name {
 				if arityOK(m, ar) {
-					return m
+					fits = append(fits, m)
 				}
 				if first == nil {
 					first = m
 				}
 			}
 		}
+	}
+	if len(fits) > 0 {
+		return q.bestOverload(fits, c)
 	}
 	if first != nil {
 		return first
@@ -721,17 +730,22 @@ func (q *qctx) findField(t *Type, name string) *Member {
 	return nil
 }
 
-func (q *qctx) pickCtor(t *Type, ar int) *Member {
+func (q *qctx) pickCtor(t *Type, c call) *Member {
+	ar := c.ar
 	var first *Member
+	var fits []*Member
 	for _, m := range t.Members {
 		if m.Kind == kCtor {
 			if arityOK(m, ar) {
-				return m
+				fits = append(fits, m)
 			}
 			if first == nil {
 				first = m
 			}
 		}
+	}
+	if len(fits) > 0 {
+		return q.bestOverload(fits, c)
 	}
 	if first != nil {
 		return first
@@ -765,14 +779,14 @@ func (q *qctx) staticOwners(name string) []*Type {
 	return out
 }
 
-func (q *qctx) methodInScope(name string, ar int, ctx *Type) *Member {
+func (q *qctx) methodInScope(name string, c call, ctx *Type) *Member {
 	for t := ctx; t != nil; t = t.Outer {
-		if m := q.findMethod(t, name, ar); m != nil {
+		if m := q.findMethod(t, name, c); m != nil {
 			return m
 		}
 	}
 	for _, t := range q.staticOwners(name) {
-		if m := q.findMethod(t, name, ar); m != nil {
+		if m := q.findMethod(t, name, c); m != nil {
 			return m
 		}
 	}
@@ -928,14 +942,14 @@ func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
 			if nm == "this" || nm == "super" || javaKeywords[nm] && nm != "this" {
 				return nil
 			}
-			ar := q.callArity(open)
+			c := q.callAt(open)
 			var m *Member
-			if p.is(before-1, ".") {
-				if ot := q.typeOfExpr(before-2, ctx); ot != nil {
-					m = q.findMethod(ot, nm, ar)
+			if dot := q.qualifierDot(before); dot >= 0 {
+				if ot := q.typeOfExpr(dot-1, ctx); ot != nil {
+					m = q.findMethod(ot, nm, c)
 				}
 			} else {
-				m = q.methodInScope(nm, ar, ctx)
+				m = q.methodInScope(nm, c, ctx)
 			}
 			if m == nil {
 				return nil
@@ -1104,8 +1118,12 @@ func (q *qctx) findLocal(name string, at int) (local, bool) {
 		if !ok {
 			continue
 		}
-		if ts := q.typeStartBack(k - 1); ts >= 0 {
-			add(k, ts, k)
+		te := k
+		if p.is(k-1, "...") { // varargs parameter (Lithe addition)
+			te = k - 1
+		}
+		if ts := q.typeStartBack(te - 1); ts >= 0 {
+			add(k, ts, te)
 		}
 	}
 	for i := len(decls) - 1; i >= 0; i-- {

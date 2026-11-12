@@ -78,6 +78,7 @@ type Member struct {
 	Type      string // declared/return type, generics and dims stripped; "" for ctors
 	Arity     int16
 	Varargs   bool
+	Params    string // parameters' simple type names, comma-separated (Lithe addition, see overloads.go)
 	Owner     *Type
 	Line, Col int32
 	Lombok    uint8 // field-level @Getter/@Setter
@@ -451,6 +452,7 @@ func (p *parser) parseBody(i int, owner *Type, enum bool) int {
 			}
 			pe := p.skipBalanced(j)
 			m.Arity, m.Varargs = p.arity(j, pe)
+			m.Params = p.paramTypes(j, pe)
 			owner.Members = append(owner.Members, m)
 			k := pe
 			sawDefault := false

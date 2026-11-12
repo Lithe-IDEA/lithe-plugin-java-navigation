@@ -1,0 +1,66 @@
+name: Release
+
+# Push a tag v<version> matching plugin.json to publish a GitHub Release.
+# Lithe Store's tracker picks up stable releases and opens index pull requests.
+# Tags listed in PRERELEASE_TAGS below are published as pre-releases, which the
+# tracker skips; they need a manually submitted Store entry. Keep the plain
+# v<version> tag. docs/releases/<tag>.md, when present, lists the changes.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test
+        run: go test -count=1 ./...
+      - name: Build archives
+        run: |
+          set -o pipefail
+          node scripts/package.mjs --expect-tag "$GITHUB_REF_NAME" | tee "$RUNNER_TEMP/checksums.txt"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # v0.0.1 follows plugin contract v0, which only the new desktop
+          # client installs, and that client ships as desktop-v* pre-releases.
+          PRERELEASE_TAGS: v0.0.1
+        run: |
+          prerelease=false
+          for tag in $PRERELEASE_TAGS; do
+            if [[ "$tag" == "$GITHUB_REF_NAME" ]]; then prerelease=true; fi
+          done
+          {
+            echo "兼容性：按插件契约 v0（schemaVersion 0、pluginAPIVersion 0）编写，需要新版 Lithe 桌面端（desktop-v* 预发布）。旧版 macOS Lithe 无法安装。"
+            echo
+            if [[ -s "docs/releases/$GITHUB_REF_NAME.md" ]]; then
+              cat "docs/releases/$GITHUB_REF_NAME.md"
+              echo
+            fi
+            if [[ "$prerelease" == true ]]; then
+              echo "安装：预发布版本，Lithe Store 自动追踪会跳过，暂不收录 Store。下载与你的系统和芯片对应的 ZIP，在 设置 → 插件 中点击页面标题栏右侧的 从文件安装…，选中 ZIP 后核对 SHA-256 并确认。"
+            else
+              echo "安装：Lithe Store（https://github.com/Lithe-IDEA/Lithe-store）中的 Java Navigation 条目合并后，可在 设置 → 插件 → 插件市场 中搜索 Java Navigation 并安装。"
+            fi
+            echo
+            echo "SHA-256："
+            echo '```'
+            sed 's#^dist/##' "$RUNNER_TEMP/checksums.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          release_flags=()
+          if [[ "$prerelease" == true ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Java Navigation $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${release_flags[@]}"

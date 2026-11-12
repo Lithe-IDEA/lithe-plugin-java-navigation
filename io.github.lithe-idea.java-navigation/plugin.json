@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 0,
+  "id": "io.github.lithe-idea.java-navigation",
+  "displayName": "Java Navigation",
+  "version": "0.0.1",
+  "pluginAPIVersion": 0,
+  "requires": {
+    "languageServers": 0,
+    "languages": 0
+  },
+  "vendor": {
+    "id": "io.github.lithe-idea",
+    "displayName": "Lithe Community",
+    "signatureRequirement": "none"
+  },
+  "permissions": [
+    "languageServer.launch"
+  ],
+  "activationEvents": [
+    "onLanguage:java"
+  ],
+  "languages": [
+    {
+      "id": "java",
+      "displayName": "Java",
+      "fileExtensions": [
+        "java"
+      ],
+      "projectFileNames": [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts"
+      ]
+    }
+  ],
+  "languageServers": [
+    {
+      "languageID": "java",
+      "languageIdentifier": "java",
+      "launch": {
+        "kind": "packaged",
+        "path": "bin/java-navigation"
+      },
+      "arguments": [
+        "--state-dir",
+        "${stateDir}"
+      ],
+      "validationArguments": [
+        "--version"
+      ]
+    }
+  ]
+}

@@ -24,6 +24,17 @@
     参数个数相同的候选交给 `bestOverload`；`resolveAt` 和 `typeOfExpr` 的限定符用 `qualifierDot` 找，
     跳过显式类型实参；限定名注解在 `resolveAt` 里按嵌套类型解析（`annotationName`）；`findLocal` 认出
     `String... keys` 这样的可变参数参数（原来类型在 `...` 前面时找不到）。
+  - 依赖库跳转（见 `internal/deps`）：
+    - `library.go`：`Library` 也装依赖 jar 的源码或签名存根，库路径可以是 `<jar 编号>!a/b/C.java`
+      （`LibraryFQN` 认这种形式）；同一个类出现在多个路径时取第一个（JDK 在前，依赖按 classpath 顺序）；
+      `paths` 的键改成类名的斜杠形式，并且是路径的子串，去掉了 `srcs` 表，15 万个类时少占约 10 MiB。
+    - `doc.go`：说明里加上依赖 jar。
+  - 内存：`lex.go` 加 `lexInto`，`parse.go` 加复用分词缓冲的 `FileParser` 和 `parseTokens`；
+    建索引分配的内存从 198 MB 降到 86 MB（Nacos）。
+  - 类型推断：`resolve.go` 的 `typeOfExpr` 认出字符串字面量和文本块（`"a".trim()`）、类字面量
+    （`Foo.class.getName()`）和 `Iface.super.m()`；`parse.go` 记下 Lombok 日志注解生成的 logger 类型
+    （`Type.LogType`，`@Slf4j` 是 `org.slf4j.Logger`），`findField` 给 `log` 字段带上这个类型，
+    `log.info(...)` 才能跳进日志库。
 - 同步后运行 `go test ./...`。
 
 `internal/jdk/find.go` 改编自 Viff 的 `internal/platform/jdk.go`（去掉了 Viff 的进程辅助函数，

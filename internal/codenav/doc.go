@@ -10,8 +10,9 @@
 // inference across expressions it cannot see (lambda parameters, generic
 // substitution) or overload resolution by argument type; such names yield no
 // answer rather than a guess. Names the working tree does not declare are
-// looked up in a Library, the JDK's sources, parsed lazily one class at a
-// time; library jars are not read. Usages are the occurrences in the working
+// looked up in a Library: the JDK's sources and the project's dependency
+// jars (their sources, or stubs of their class files), parsed lazily one
+// class at a time. Usages are the occurrences in the working
 // tree that navigate back to a declaration under those same rules. ADR 0040
 // records the trade-off and how it was measured against JDTLS; ADR 0041 adds
 // the JDK.

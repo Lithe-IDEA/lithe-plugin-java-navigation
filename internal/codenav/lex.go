@@ -42,7 +42,13 @@ var javaKeywords = func() map[string]bool {
 }()
 
 func lex(src []byte) []token {
-	toks := make([]token, 0, len(src)/5)
+	return lexInto(make([]token, 0, len(src)/5), src)
+}
+
+// lexInto appends the tokens of src to toks, which a caller parsing many
+// files reuses: the tokens of a file are scratch once its declarations are
+// read, and allocating them anew was half of what indexing allocated.
+func lexInto(toks []token, src []byte) []token {
 	line := int32(0)
 	i, n := 0, len(src)
 	for i < n {

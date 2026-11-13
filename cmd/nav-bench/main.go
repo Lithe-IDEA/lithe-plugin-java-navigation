@@ -1,5 +1,6 @@
 // Command nav-bench measures a Java language server on a real project: it
-// samples identifiers in the project's src/main/java files (not keywords,
+// samples identifiers in the project's src/main/java files (-under picks
+// another source root; not keywords,
 // literals, comments, package or import lines), asks the server for the
 // definition of each one, then for the references of some, and reports the
 // share that resolved per syntactic category, the latency of each request
@@ -349,14 +350,14 @@ func utf16Col(line string, byteOff int) int {
 	return len(utf16.Encode([]rune(line[:byteOff])))
 }
 
-func collect(root string) []sample {
+func collect(root, under string) []sample {
 	out, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "*.java").Output()
 	if err != nil {
 		panic(err)
 	}
 	var all []sample
 	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if !strings.Contains(rel, "src/main/java/") {
+		if !strings.Contains(rel, under) {
 			continue
 		}
 		path := filepath.Join(root, rel)
@@ -400,13 +401,14 @@ func main() {
 	tag := flag.String("tag", "run", "output tag")
 	outDir := flag.String("out", ".", "output dir")
 	refs := flag.Int("refs", 20, "references requests")
+	under := flag.String("under", "src/main/java/", "sample only files whose path contains this (old layouts: src/)")
 	flag.Parse()
 	args := flag.Args()
 	if *root == "" || len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: nav-bench -root <project> [-seed n] [-n samples] [-jdtls] [-tag name] [-out dir] -- <server command>")
 		os.Exit(2)
 	}
-	all := collect(*root)
+	all := collect(*root, *under)
 	r := rand.New(rand.NewSource(*seed))
 	r.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
 	if len(all) > *n {

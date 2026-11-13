@@ -1,6 +1,7 @@
 // Package deps lets navigation follow names into a project's dependency
 // jars. It finds the jars of the Maven projects in a working tree in the
-// local repository (MavenJars), lists the classes each one declares and,
+// local repository (MavenJars) and the jars a tree keeps itself (TreeJars),
+// lists the classes each one declares and,
 // for a class a lookup needs, returns Java source: the entry of the jar's
 // -sources.jar when it was downloaded, else a stub of signatures written
 // from the class files. Only the archives' directories are read up front;
@@ -127,18 +128,42 @@ func (s *Set) Paths() []string { return s.paths }
 // as the .java file a stub of them is.
 func listJar(j Jar) (*archive, []string, error) {
 	a := &archive{Jar: j}
-	if j.Sources != "" {
-		a.file, a.sources = j.Sources, true
-		if entries, err := a.list(); err == nil && len(entries) > 0 {
-			return a, entries, nil
-		}
-	}
-	a.file, a.sources = j.Path, false
-	entries, err := a.list()
+	a.file = j.Path
+	classes, err := a.list()
 	if err != nil {
 		return nil, nil, err
 	}
-	return a, entries, nil
+	if j.Sources != "" {
+		s := &archive{Jar: j, file: j.Sources, sources: true}
+		if entries, err := s.list(); err == nil && rootedLike(entries, classes) {
+			return s, entries, nil
+		}
+	}
+	return a, classes, nil
+}
+
+// rootedLike reports whether a source archive lays its files out by package
+// from its root, as the class jar does: an archive of a source tree
+// ("lib-1.0-src/src/main/java/a/B.java") would name every class wrongly.
+// One class of the jar found at its place is enough, since a sources jar may
+// leave out generated classes. A jar without classes accepts any sources.
+func rootedLike(sources, classes []string) bool {
+	if len(sources) == 0 {
+		return false
+	}
+	if len(classes) == 0 {
+		return true
+	}
+	have := make(map[string]bool, len(sources))
+	for _, e := range sources {
+		have[e] = true
+	}
+	for _, c := range classes {
+		if have[c] {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *archive) list() ([]string, error) {

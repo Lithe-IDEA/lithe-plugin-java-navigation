@@ -20,6 +20,7 @@
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
 | 跳进依赖库 | Maven 项目的依赖（含传递依赖）从本地仓库读：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
+| 老项目的 jar | 没有 Maven 的 Ant、Eclipse、MyEclipse 项目，读 `.classpath` 里列出的 jar（含 `M2_REPO` 变量和 `sourcepath`），以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
 | 生成代码 | 模块的 `target/generated-sources`（protobuf、注解处理器）和 Gradle 的 `build/generated` 也进索引，即使被 `.gitignore` 忽略 |
 | 查找引用 | 只列出能跳回这个声明的出现，所以列表和在任一行上跳转的结果一致；`package`/`import` 不算引用 |
 | 文档结构 | 类型、成员和嵌套类型的大纲（`textDocument/documentSymbol`） |
@@ -37,7 +38,14 @@
   本地仓库没有的 jar 跳过；版本是范围或引用了不认识的属性时取本地最高的版本。工作区自己的模块不当依赖。
   只预先列出每个 jar 的目录（Nacos 265 个 jar、4.4 万个类；ruoyi-vue-pro 824 个 jar、15 万个类，约 0.3 秒），
   某个类第一次被查到时才读它的源码或生成存根；跳进去时把那一个文件写成只读副本，放在 `${stateDir}/dependency-sources`，
-  不写本地仓库。`pom.xml` 变了、或距上次读取超过 5 分钟，下一次扫描重新读取。
+  不写本地仓库。
+- 工作区里的 jar：先按每个 Eclipse `.classpath` 的 `lib` 条目和 `M2_REPO` 变量条目的顺序，再加上路径往上三层内
+  有 `lib` 或 `libs` 目录的 jar（`WEB-INF/lib`、`lib/optional` 都算；测试资源里的 jar、`gradle-wrapper.jar`、
+  `target`/`build` 里的不算）；工作区根目录和每个 `build.xml`、`.classpath`、`.project` 所在目录下的 `lib`、
+  `WEB-INF/lib`、`WebContent/WEB-INF/lib`、`WebRoot/WEB-INF/lib` 等即使被 `.gitignore` 忽略也会读。源码取
+  `.classpath` 的 `sourcepath`，或旁边的 `-sources.jar`、`-src.zip`；源码包不是按包名放的（比如整个源码树打的 zip）就不用，改用存根。
+  这些 jar 只读，不会被修改。
+- `pom.xml`、`.classpath` 或上面任一个 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
 - JDK：按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
   （含 IntelliJ 的 `~/.jdks`、SDKMAN!）的顺序找第一个带 `src.zip` 的 JDK。只预先列出 zip 目录，某个类第一次被查到时才解析。
   跳进 JDK 时把那一个源码文件解压成只读副本，放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
@@ -76,9 +84,26 @@
 其余是 JDT LS 能跳、本插件跳不了的泛型和 lambda（`list.get(i).split(...)`、`map.get(a).get(b)`、比较器里的
 `o1.getPriority()`），以及两处要按泛型实参挑选的重载（`JsonUtils.toObj(String, ...)` 和 `toObj(byte[], ...)`）。
 
+### 小众框架和老项目
+
+每个项目 1500 个随机位置（种子 2），源码目录按项目实际布局取。跳到的目标全部逐个核对过，都落在该名字的声明行上：
+
+| 项目 | 类型 | 能跳转的比例 | 跳转 p50 / p99 | 第一次跳转 | 内存（物理占用） |
+| --- | --- | --- | --- | --- | --- |
+| [JFinal](https://github.com/jfinal/jfinal) | 国产小众 Web 框架，Maven | 96.8% | 0.13 ms / 1.5 ms | 57 ms | 21 MiB |
+| [Nutz](https://github.com/nutzam/nutz) | 国产小众框架，源码直接放 `src/` | 97.8% | 0.15 ms / 1.3 ms | 55 ms | 27 MiB |
+| [Solon](https://github.com/opensolon/solon) | 国产小众框架，150 个模块 | 96.5% | 0.12 ms / 2.1 ms | 0.19 s | 36 MiB |
+| [Apache Ant](https://github.com/apache/ant) | 2000 年起的老项目，`src/main/org` | 99.1% | 0.19 ms / 1.3 ms | 56 ms | 29 MiB |
+| [Struts 1](https://github.com/apache/struts1) | 已归档的老框架，JSF/JSP | 97.5% | 0.16 ms / 1.8 ms | 44 ms | 22 MiB |
+| [JForum 2](https://github.com/rafaelsteil/jforum2) | 已归档的 Ant 项目，jar 提交在 `WEB-INF/lib`，没有 pom | 99.3%（读工作区 jar 之前 95.9%） | 0.15 ms / 1.4 ms | 37 ms | 20 MiB |
+
+剩下没跳到的主要是：依赖没在项目里声明或本地仓库没有（JFinal 的 Servlet 依赖在 pom 里被注释掉了，Struts 的
+JSF 依赖没下载过）、数组的 `.length`（JDT LS 也不跳）、`java.util.Date` 这种全限定名里的包名段，以及 lambda 参数。
+
 ## 限制
 
-- **依赖库只读 Maven 项目**：Gradle 项目的依赖还读不了（Gradle 的生成代码可以）；只用本地仓库里已有的 jar，
+- **依赖库只读 Maven 和工作区里的 jar**：Gradle 项目的依赖还读不了（Gradle 的生成代码可以）；Ant 的
+  `build.xml` 里写在 `lib` 之外目录的 classpath 也读不了。只用本地仓库里已有的 jar，
   从没构建过、依赖还没下载的项目跳不进依赖库。没有 `-sources.jar` 时打开签名存根，没有方法体和注释；
   编译时没带调试信息的接口和抽象方法，参数名是 `arg0`、`arg1`。
 - **没有泛型推断**：重载先按参数个数选，个数相同时按实参里写得出来的类型挑（字面量、强转、`new` 表达式、

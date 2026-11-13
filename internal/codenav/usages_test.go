@@ -185,3 +185,52 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+// Every variable of a declaration of several is a local with the
+// declaration's type; names inside the initializers are not (Lithe
+// addition).
+func TestEveryVariableOfADeclarationIsALocal(t *testing.T) {
+	const path = "src/a/M.java"
+	src := `package a;
+
+class M {
+    int b;
+    String name() { return ""; }
+    M make(int k, int b) { return this; }
+    int run(String key, java.util.List<M> list) {
+        int s2, s5;
+        for (int i = 0, size = key.length(); i < size; i++) {
+            s5 = i;
+        }
+        M x = list.get(0), y = make(s2, b), z;
+        z = y;
+        return s5 + y.name().length() + b;
+    }
+}
+`
+	ix := NewIndex()
+	ix.Put(ParseFile(path, []byte(src)))
+	line := func(needle string) int {
+		t.Helper()
+		return strings.Count(src[:strings.Index(src, needle)], "\n")
+	}
+	for _, c := range []struct {
+		needle    string
+		skip      int
+		wantLocal bool
+		wantLine  int
+	}{
+		{"s5 = i", 0, true, line("int s2, s5;")},
+		{"size; i++", 0, true, line("for (int i")},
+		{"z = y", 0, true, line("M x =")},
+		{"y;\n", 0, true, line("M x =")},
+		{"name().length", 0, false, line("String name()")},
+		// b in make(s2, b) is the field, not a third variable of M x.
+		{"b;\n    }\n}", 0, false, line("int b;")},
+	} {
+		l, ok := ix.Resolve(path, []byte(src), offsetOf(t, src, c.needle, 0, c.skip))
+		if !ok || l.Local != c.wantLocal || l.Line != c.wantLine {
+			t.Errorf("%q: %+v ok=%v, want local=%v line %d", c.needle, l, ok, c.wantLocal, c.wantLine)
+		}
+	}
+}

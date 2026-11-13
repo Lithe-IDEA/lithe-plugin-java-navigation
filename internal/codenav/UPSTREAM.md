@@ -35,6 +35,8 @@
     （`Foo.class.getName()`）和 `Iface.super.m()`；`parse.go` 记下 Lombok 日志注解生成的 logger 类型
     （`Type.LogType`，`@Slf4j` 是 `org.slf4j.Logger`），`findField` 给 `log` 字段带上这个类型，
     `log.info(...)` 才能跳进日志库。
+  - 局部变量：`resolve.go` 的 `findLocal` 认出一条声明里逗号后面的变量（`int i = 0, size = s.length();`、
+    `int a, b;`），沿用第一个变量的类型；初始化表达式里括号更深的名字不算。
 - 同步后运行 `go test ./...`。
 
 `internal/jdk/find.go` 改编自 Viff 的 `internal/platform/jdk.go`（去掉了 Viff 的进程辅助函数，

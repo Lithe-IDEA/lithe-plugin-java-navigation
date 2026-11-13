@@ -105,7 +105,7 @@ func TestDefinitionIntoADependencyJarAndBack(t *testing.T) {
 	write(t, root, map[string]string{"pom.xml": depsPOM, "src/main/java/com/acme/UseDeps.java": useDeps})
 	repo := mavenRepo(t)
 	before := treeHash(t, repo)
-	w := New(Options{Root: root, State: filepath.Join(t.TempDir(), "state"), MavenRepo: repo,
+	w := New(Options{Root: root, State: filepath.Join(t.TempDir(), "state"), Dependencies: true, MavenRepo: repo,
 		ListFiles: walkFiles, Freshness: -1, Logf: t.Logf})
 	doc := w.DocOf(filepath.Join(root, "src/main/java/com/acme/UseDeps.java"))
 
@@ -178,7 +178,7 @@ func TestEditingPOMRereadsTheDependencies(t *testing.T) {
 	root := t.TempDir()
 	src := "package com.acme;\n\nimport com.example.helper.Helper;\n\nclass A {\n    String s = Helper.shout(\"x\");\n}\n"
 	write(t, root, map[string]string{"pom.xml": depsPOM, "src/main/java/com/acme/A.java": src})
-	w := New(Options{Root: root, State: filepath.Join(t.TempDir(), "state"), MavenRepo: mavenRepo(t),
+	w := New(Options{Root: root, State: filepath.Join(t.TempDir(), "state"), Dependencies: true, MavenRepo: mavenRepo(t),
 		ListFiles: walkFiles, Freshness: -1, Logf: t.Logf})
 	doc := w.DocOf(filepath.Join(root, "src/main/java/com/acme/A.java"))
 	if _, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, "shout", 0, 1)); err != nil || ok {
@@ -233,5 +233,45 @@ func TestGeneratedSourcesAreListed(t *testing.T) {
 	}
 	if got["api/target/other/B.java"] || got["api/target/classes/a/Msg.class"] {
 		t.Errorf("listed other build output: %v", files)
+	}
+}
+
+// A project without Maven, its jars in WEB-INF/lib as an Ant or Eclipse web
+// application keeps them, navigates into them; a jar added to lib/ is found
+// by the next scan.
+func TestDefinitionIntoJarsTheTreeKeeps(t *testing.T) {
+	root := t.TempDir()
+	src := "package com.acme;\n\nimport com.example.lib.Container;\nimport com.example.helper.Helper;\n\nclass A {\n    Container<String> box;\n    String s = Helper.shout(\"x\");\n}\n"
+	write(t, root, map[string]string{"build.xml": "<project/>", "src/com/acme/A.java": src})
+	fixture := filepath.Join("..", "deps", "testdata", "fixture")
+	if err := os.MkdirAll(filepath.Join(root, "WEB-INF", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, filepath.Join(fixture, "lib-1.0.jar"), filepath.Join(root, "WEB-INF", "lib", "lib-1.0.jar"))
+	before := treeHash(t, filepath.Join(root, "WEB-INF"))
+	w := New(Options{Root: root, State: filepath.Join(t.TempDir(), "state"), Dependencies: true,
+		ListFiles: walkFiles, Freshness: -1, Logf: t.Logf})
+	doc := w.DocOf(filepath.Join(root, "src/com/acme/A.java"))
+	tgt, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, "Container<String>", 0, 1))
+	if err != nil || !ok || !strings.Contains(filepath.ToSlash(tgt.File), "/state/dependency-sources/lib-1.0-") {
+		t.Fatalf("Container: %+v %v %v", tgt, ok, err)
+	}
+	if _, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, "shout", 0, 1)); err != nil || ok {
+		t.Fatalf("Helper resolved before its jar was added: %v %v", ok, err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, filepath.Join(fixture, "helper-2.0.jar"), filepath.Join(root, "lib", "helper-2.0.jar"))
+	copyFile(t, filepath.Join(fixture, "helper-2.0-sources.jar"), filepath.Join(root, "lib", "helper-2.0-sources.jar"))
+	tgt, ok, err = w.Definition(ctx(t), doc, []byte(src), at(t, src, "shout", 0, 1))
+	if err != nil || !ok {
+		t.Fatalf("Helper.shout after the jar was added: %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(tgt.File); !strings.Contains(string(b), "return text.toUpperCase();") {
+		t.Errorf("shout did not open the sources jar:\n%s", b)
+	}
+	if treeHash(t, filepath.Join(root, "WEB-INF")) != before {
+		t.Errorf("WEB-INF changed")
 	}
 }

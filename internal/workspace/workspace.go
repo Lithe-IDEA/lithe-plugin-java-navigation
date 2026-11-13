@@ -70,8 +70,13 @@ type Options struct {
 	State string
 	// FindJDK locates the JDK whose sources are used; nil disables them.
 	FindJDK func(context.Context) (jdk.JDK, bool)
-	// MavenRepo is the local Maven repository whose jars the folder's
-	// dependencies are read from; "" (or an empty State) disables them.
+	// Dependencies enables navigation into the folder's dependency jars;
+	// it needs State. They are the Maven dependencies its pom.xml files
+	// declare, read from MavenRepo, and the jars the tree keeps itself
+	// (deps.TreeJars).
+	Dependencies bool
+	// MavenRepo is the local Maven repository; "" leaves Maven dependencies
+	// out.
 	MavenRepo string
 	// ListFiles lists the files of root as slash-separated relative paths;
 	// nil uses ListFiles.
@@ -120,7 +125,7 @@ type Workspace struct {
 	sources   *jdk.Sources
 	looked    bool             // the JDK was looked for
 	deps      *deps.Set        // the dependency jars, nil until listed
-	poms      map[string]stamp // the pom.xml files deps was read from
+	inputs    map[string]stamp // the build files and tree jars deps was read from
 	depsAt    time.Time        // when deps was read
 	lib       *codenav.Library // the JDK and deps, as the index looks names up
 }
@@ -459,7 +464,7 @@ func (w *Workspace) runScan(run *scanRun) {
 	started := time.Now()
 	w.mu.Lock()
 	old := w.stamps
-	oldPoms := w.poms
+	oldInputs := w.inputs
 	depsAt := w.depsAt
 	w.stale = false
 	lookJDK := w.opt.FindJDK != nil && (!w.looked || w.sources != nil && w.sources.Changed())
@@ -487,16 +492,21 @@ func (w *Workspace) runScan(run *scanRun) {
 	if err != nil {
 		err = fmt.Errorf("list source files: %w", err)
 	}
-	poms := w.pomStamps(all)
-	lookDeps := err == nil && w.opt.MavenRepo != "" && w.opt.State != "" &&
-		(oldPoms == nil || !sameStamps(oldPoms, poms) || time.Since(depsAt) > depsRefresh)
+	var poms []string
+	var tree []deps.Jar
+	var inputs map[string]stamp
+	useDeps := err == nil && w.opt.Dependencies && w.opt.State != ""
+	if useDeps {
+		poms, tree, inputs = w.depInputs(all)
+	}
+	lookDeps := useDeps && (oldInputs == nil || !sameStamps(oldInputs, inputs) || time.Since(depsAt) > depsRefresh)
 	var depSet *deps.Set
 	var depsErr error
 	depsDone := make(chan struct{})
 	if lookDeps {
 		go func() {
 			defer close(depsDone)
-			depSet, depsErr = w.readDeps(ctx, poms)
+			depSet, depsErr = w.readDeps(ctx, poms, tree)
 		}()
 	} else {
 		close(depsDone)
@@ -526,7 +536,7 @@ func (w *Workspace) runScan(run *scanRun) {
 		if depsErr != nil {
 			w.opt.Logf("dependency jars unavailable: %v", depsErr)
 		} else {
-			w.deps, w.poms, w.depsAt = depSet, poms, started
+			w.deps, w.inputs, w.depsAt = depSet, inputs, started
 			changed = true
 		}
 	}
@@ -586,19 +596,38 @@ func (w *Workspace) library() *codenav.Library {
 	})
 }
 
-// pomStamps returns the size and modification time of the folder's
-// pom.xml files among all, the folder's files.
-func (w *Workspace) pomStamps(all []string) map[string]stamp {
-	out := map[string]stamp{}
-	for _, p := range all {
-		if path.Base(p) != "pom.xml" {
-			continue
+// depInputs returns the absolute paths of the folder's pom.xml files, the
+// jars its tree keeps, and the stamps of both and of its Eclipse .classpath
+// files: a change to any of them rereads the dependencies. all is the
+// folder's files.
+func (w *Workspace) depInputs(all []string) (poms []string, tree []deps.Jar, inputs map[string]stamp) {
+	inputs = map[string]stamp{}
+	note := func(p string) bool {
+		fi, err := os.Stat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			return false
 		}
-		if fi, err := os.Stat(w.abs(p)); err == nil && fi.Mode().IsRegular() {
-			out[p] = stamp{size: fi.Size(), mod: fi.ModTime()}
+		inputs[p] = stamp{size: fi.Size(), mod: fi.ModTime()}
+		return true
+	}
+	for _, p := range all {
+		switch path.Base(p) {
+		case "pom.xml":
+			if w.opt.MavenRepo != "" && note(w.abs(p)) {
+				poms = append(poms, w.abs(p))
+			}
+		case ".classpath":
+			note(w.abs(p))
 		}
 	}
-	return out
+	tree = deps.TreeJars(w.opt.Root, all, w.opt.MavenRepo)
+	for _, j := range tree {
+		note(j.Path)
+		if j.Sources != "" {
+			note(j.Sources)
+		}
+	}
+	return poms, tree, inputs
 }
 
 func sameStamps(a, b map[string]stamp) bool {
@@ -613,21 +642,21 @@ func sameStamps(a, b map[string]stamp) bool {
 	return true
 }
 
-// readDeps lists the jars of the Maven dependencies the poms declare.
-func (w *Workspace) readDeps(ctx context.Context, poms map[string]stamp) (*deps.Set, error) {
-	if len(poms) == 0 {
-		return deps.Open(nil, w.opt.Logf), nil
+// readDeps lists the jars of the Maven dependencies the poms declare, then
+// the jars the tree keeps.
+func (w *Workspace) readDeps(ctx context.Context, poms []string, tree []deps.Jar) (*deps.Set, error) {
+	var jars []deps.Jar
+	if len(poms) > 0 {
+		var err error
+		if jars, err = deps.MavenJars(ctx, poms, w.opt.MavenRepo, w.opt.Logf); err != nil {
+			return nil, err
+		}
 	}
-	files := make([]string, 0, len(poms))
-	for p := range poms {
-		files = append(files, w.abs(p))
-	}
-	jars, err := deps.MavenJars(ctx, files, w.opt.MavenRepo, w.opt.Logf)
-	if err != nil {
-		return nil, err
-	}
+	maven := len(jars)
+	jars = append(jars, tree...)
 	set := deps.Open(jars, w.opt.Logf)
-	w.opt.Logf("dependency jars: %d of %d resolved, %d classes", set.Len(), len(jars), set.Classes())
+	w.opt.Logf("dependency jars: %d of %d resolved (%d Maven, %d in the working tree), %d classes",
+		set.Len(), len(jars), maven, len(tree), set.Classes())
 	return set, nil
 }
 

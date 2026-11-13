@@ -42,6 +42,8 @@ var projectMarkers = map[string]bool{"build.xml": true, ".classpath": true, ".pr
 // slash-separated relative paths; repo resolves Eclipse's M2_REPO variable
 // and may be "". Jars that do not exist are left out. A jar's sources are the
 // .classpath entry's sourcepath, else a -sources.jar or -src.zip next to it.
+// Last come the jars of the .classpath's server runtime and JUnit containers
+// (see container), when the tree does not keep them itself.
 func TreeJars(root string, files []string, repo string) []Jar {
 	t := treeJars{seen: map[string]bool{}}
 	var markerDirs []string
@@ -71,22 +73,36 @@ func TreeJars(root string, files []string, repo string) []Jar {
 			}
 		}
 	}
+	if t.servlet == "" {
+		t.servlet, _ = webAppWithoutBuild(root, files)
+	}
+	t.resolveContainers(repo)
 	return t.out
 }
 
 type treeJars struct {
 	out  []Jar
 	seen map[string]bool
+	// servlet is the package of the Servlet API a server runtime provides,
+	// "" when the tree uses none; junit is the JUnit container's version,
+	// "" when there is none. resolveContainers adds them last.
+	servlet string
+	junit   string
 }
 
 // add lists jar once, with sources when given or found next to it.
 func (t *treeJars) add(jar, sources string) {
+	t.addAs(jar, sources, strings.TrimSuffix(filepath.Base(jar), ".jar"))
+}
+
+// addAs is add with the jar's coordinates, and reports whether it listed it.
+func (t *treeJars) addAs(jar, sources, coord string) bool {
 	jar = filepath.Clean(jar)
 	if len(t.out) >= maxTreeJars || t.seen[jar] || !isLibraryJar(filepath.Base(jar)) {
-		return
+		return false
 	}
 	if fi, err := os.Stat(jar); err != nil || !fi.Mode().IsRegular() {
-		return
+		return false
 	}
 	t.seen[jar] = true
 	if sources == "" {
@@ -94,7 +110,8 @@ func (t *treeJars) add(jar, sources string) {
 	} else if fi, err := os.Stat(sources); err != nil || !fi.Mode().IsRegular() {
 		sources = ""
 	}
-	t.out = append(t.out, Jar{Coord: strings.TrimSuffix(filepath.Base(jar), ".jar"), Path: jar, Sources: sources})
+	t.out = append(t.out, Jar{Coord: coord, Path: jar, Sources: sources})
+	return true
 }
 
 // walkLib adds the jars under dir, two directory levels deep.
@@ -161,6 +178,10 @@ func (t *treeJars) classpath(root, rel, repo string) {
 		return ""
 	}
 	for _, e := range cp.Entries {
+		if e.Kind == "con" {
+			t.container(e.Path)
+			continue
+		}
 		if jar := resolve(e.Kind, e.Path); jar != "" {
 			t.add(jar, resolve(e.Kind, e.SourcePath))
 		}

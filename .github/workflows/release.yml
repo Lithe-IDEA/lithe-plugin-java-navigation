@@ -33,9 +33,9 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          # v0.0.1 follows plugin contract v0, which only the new desktop
-          # client installs, and that client ships as desktop-v* pre-releases.
-          PRERELEASE_TAGS: v0.0.1
+          # Releases on plugin contract v0, which only the new desktop client
+          # installs, and that client ships as desktop-v* pre-releases.
+          PRERELEASE_TAGS: v0.0.1 v0.0.2
         run: |
           prerelease=false
           for tag in $PRERELEASE_TAGS; do
@@ -49,7 +49,7 @@ jobs:
               echo
             fi
             if [[ "$prerelease" == true ]]; then
-              echo "安装：预发布版本，Lithe Store 自动追踪会跳过，暂不收录 Store。下载与你的系统和芯片对应的 ZIP，在 设置 → 插件 中点击页面标题栏右侧的 从文件安装…，选中 ZIP 后核对 SHA-256 并确认。"
+              echo "安装：预发布版本，Lithe Store 自动追踪会跳过，索引条目手工提交（https://github.com/Lithe-IDEA/Lithe-store）；条目合并后可在 设置 → 插件 → 插件市场 中搜索 Java Navigation 并安装。也可以下载与你的系统和芯片对应的 ZIP，在 设置 → 插件 中点击页面标题栏右侧的 从文件安装…，选中 ZIP 后核对 SHA-256 并确认。"
             else
               echo "安装：Lithe Store（https://github.com/Lithe-IDEA/Lithe-store）中的 Java Navigation 条目合并后，可在 设置 → 插件 → 插件市场 中搜索 Java Navigation 并安装。"
             fi

@@ -1095,15 +1095,37 @@ func (q *qctx) findLocal(name string, at int) (local, bool) {
 		decls = append(decls, local{k, ts, te})
 		names = append(names, p.txt(k))
 	}
+	// A declaration of several variables (int i = 0, n = s.length();)
+	// gives the names after its commas the first one's type (Lithe
+	// addition). multi is that declaration while its statement lasts, at
+	// paren depth multiDepth; the initializers' arguments are deeper.
+	var multi *local
+	depth, multiDepth := 0, 0
 	for k := b.start; k <= at && k < len(p.toks); k++ {
 		switch {
 		case p.is(k, "{"):
 			marks = append(marks, len(decls))
+			multi = nil
 			continue
 		case p.is(k, "}"):
 			if n := len(marks); n > 0 {
 				decls, names = decls[:marks[n-1]], names[:marks[n-1]]
 				marks = marks[:n-1]
+			}
+			multi = nil
+			continue
+		case p.is(k, "("):
+			depth++
+			continue
+		case p.is(k, ")"):
+			depth--
+			if multi != nil && depth < multiDepth {
+				multi = nil
+			}
+			continue
+		case p.is(k, ";"):
+			if multi != nil && depth <= multiDepth {
+				multi = nil
 			}
 			continue
 		case p.is(k, "->"):
@@ -1138,6 +1160,11 @@ func (q *qctx) findLocal(name string, at int) (local, bool) {
 		}
 		if ts := q.typeStartBack(te - 1); ts >= 0 {
 			add(k, ts, te)
+			if !p.is(nx, ")") && !p.is(nx, ":") {
+				multi, multiDepth = &local{k, ts, te}, depth
+			}
+		} else if multi != nil && depth == multiDepth && p.is(k-1, ",") && !p.is(nx, ":") {
+			add(k, multi.typeS, multi.typ)
 		}
 	}
 	for i := len(decls) - 1; i >= 0; i-- {

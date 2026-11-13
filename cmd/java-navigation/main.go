@@ -35,7 +35,7 @@ func main() {
 	state := flag.String("state-dir", "", "writable directory for extracted JDK sources (the host's ${stateDir})")
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	noJDK := flag.Bool("no-jdk", false, "do not navigate into the JDK's sources")
-	noDeps := flag.Bool("no-dependencies", false, "do not navigate into the jars of Maven dependencies")
+	noDeps := flag.Bool("no-dependencies", false, "do not navigate into dependency jars (Maven dependencies and the jars the project keeps)")
 	flag.Bool("stdio", true, "speak LSP over standard input and output (the only transport)")
 	flag.Parse()
 	if *printVersion {
@@ -49,8 +49,11 @@ func main() {
 	if !*noJDK && *state != "" {
 		opt.FindJDK = jdk.FindJDK
 	}
-	if home, err := os.UserHomeDir(); err == nil && !*noDeps && *state != "" {
-		opt.MavenRepo = deps.LocalRepository(home)
+	if !*noDeps && *state != "" {
+		opt.Dependencies = true
+		if home, err := os.UserHomeDir(); err == nil {
+			opt.MavenRepo = deps.LocalRepository(home)
+		}
 	}
 	if *state == "" {
 		logger.Printf("no --state-dir: navigation into the JDK and dependency jars is off")

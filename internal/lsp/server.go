@@ -27,8 +27,11 @@ type Options struct {
 	State string
 	// FindJDK locates the JDK whose sources are used; nil disables them.
 	FindJDK func(context.Context) (jdk.JDK, bool)
-	// MavenRepo is the local Maven repository dependency jars are read
-	// from; "" disables them.
+	// Dependencies enables navigation into dependency jars (see
+	// workspace.Options.Dependencies).
+	Dependencies bool
+	// MavenRepo is the local Maven repository; "" leaves Maven dependencies
+	// out.
 	MavenRepo string
 	// Workspace overrides workspace options other than Root, for tests.
 	Workspace workspace.Options
@@ -308,6 +311,7 @@ func (s *Server) newWorkspace(root string) *workspace.Workspace {
 	o.Root = root
 	o.State = s.opt.State
 	o.FindJDK = s.opt.FindJDK
+	o.Dependencies = s.opt.Dependencies
 	o.MavenRepo = s.opt.MavenRepo
 	if o.Logf == nil {
 		o.Logf = s.opt.Logf

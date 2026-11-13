@@ -1,0 +1,3 @@
+# Test data is compared byte for byte (golden stubs) or is binary (jars):
+# never convert its line endings on checkout.
+internal/deps/testdata/** -text

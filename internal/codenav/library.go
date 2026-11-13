@@ -7,7 +7,8 @@ import (
 )
 
 // Library is a read-only set of Java sources outside the working tree: the
-// JDK's src.zip. Unlike the Index it is not parsed up front. A lookup the
+// JDK's src.zip and the project's dependency jars (their sources, or stubs
+// written from their class files). Unlike the Index it is not parsed up front. A lookup the
 // working tree cannot answer asks the library for the type's fully qualified
 // name, and the source declaring it is read and parsed the first time, then
 // kept, so a session only ever holds the JDK classes it navigated through.
@@ -19,10 +20,11 @@ import (
 //
 // A Library is safe for concurrent use and can be shared by several Indexes.
 type Library struct {
-	// paths maps the FQN of each top-level type to the library path of its
-	// source; it never changes, so misses need no lock.
+	// paths maps each top-level type to the library path of its source,
+	// keyed by the type's slash-separated name ("java/lang/String"), which is
+	// a substring of the path, so a library of 150,000 classes holds one
+	// string per class; it never changes, so misses need no lock.
 	paths map[string]string
-	srcs  map[string]bool // the values of paths
 	read  func(path string) ([]byte, error)
 
 	mu    sync.RWMutex
@@ -33,20 +35,22 @@ type Library struct {
 
 // NewLibrary returns a library over the sources at paths; the FQN of each
 // one's top-level type follows from its path (see LibraryFQN), and paths that
-// declare no type are ignored. read returns a source's content; it is called
-// at most once per path.
+// declare no type are ignored. When several paths declare the same type the
+// first one wins, so callers list the JDK before the dependencies and those
+// in classpath order. read returns a source's content; it is called at most
+// once per path.
 func NewLibrary(paths []string, read func(path string) ([]byte, error)) *Library {
 	l := &Library{
 		paths: make(map[string]string, len(paths)),
-		srcs:  make(map[string]bool, len(paths)),
 		read:  read,
 		files: map[string]*File{},
 		byFQN: map[string][]*Type{},
 	}
 	for _, p := range paths {
-		if fqn, ok := LibraryFQN(p); ok {
-			l.paths[fqn] = p
-			l.srcs[p] = true
+		if key, ok := libraryKey(p); ok {
+			if _, dup := l.paths[key]; !dup {
+				l.paths[key] = p
+			}
 		}
 	}
 	return l
@@ -55,13 +59,25 @@ func NewLibrary(paths []string, read func(path string) ([]byte, error)) *Library
 // LibraryFQN derives the fully qualified name of the top-level type a source
 // archive entry declares: "java.base/java/lang/String.java" (JDK 9 and later,
 // led by a module directory) and "java/lang/String.java" (JDK 8) both give
-// "java.lang.String". module-info and package-info declare no type.
+// "java.lang.String". An entry of a dependency jar is led by the jar's key and
+// a "!" ("<key>!a/b/C.java"). module-info and package-info declare no type.
 func LibraryFQN(entry string) (string, bool) {
+	key, ok := libraryKey(entry)
+	if !ok {
+		return "", false
+	}
+	return strings.ReplaceAll(key, "/", "."), true
+}
+
+// libraryKey is LibraryFQN with slashes for dots, as a substring of entry.
+func libraryKey(entry string) (string, bool) {
 	name, ok := strings.CutSuffix(entry, ".java")
 	if !ok || name == "" {
 		return "", false
 	}
-	if i := strings.IndexByte(name, '/'); i > 0 && strings.Contains(name[:i], ".") {
+	if i := strings.IndexByte(name, '!'); i >= 0 {
+		name = name[i+1:]
+	} else if i := strings.IndexByte(name, '/'); i > 0 && strings.Contains(name[:i], ".") {
 		// A module directory: package directories never contain a dot.
 		name = name[i+1:]
 	}
@@ -69,7 +85,7 @@ func LibraryFQN(entry string) (string, bool) {
 	if base == "module-info" || base == "package-info" || strings.Contains(name, ".") {
 		return "", false
 	}
-	return strings.ReplaceAll(name, "/", "."), true
+	return name, true
 }
 
 // Len is the number of sources parsed so far.
@@ -95,7 +111,7 @@ func (l *Library) Err() error {
 func (l *Library) lookup(fqn string) *Type {
 	src := ""
 	for top := fqn; ; {
-		if p, ok := l.paths[top]; ok {
+		if p, ok := l.paths[strings.ReplaceAll(top, ".", "/")]; ok {
 			src = p
 			break
 		}
@@ -156,7 +172,7 @@ func (l *Library) file(path string) *File {
 	if ok {
 		return f
 	}
-	if !l.srcs[path] {
+	if key, ok := libraryKey(path); !ok || l.paths[key] != path {
 		return nil
 	}
 	l.load(path)

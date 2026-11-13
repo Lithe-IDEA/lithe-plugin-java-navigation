@@ -40,7 +40,7 @@ type Sources struct {
 	size    int64
 	mod     time.Time
 	entries map[string]entry // by entry name, .java files only
-	lib     *codenav.Library
+	names   []string         // the entry names, in archive order
 }
 
 // entry locates one stored or deflated file in the archive.
@@ -82,12 +82,13 @@ func Open(j JDK) (*Sources, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("read JDK sources: no Java sources in %s", j.Sources)
 	}
-	s.lib = codenav.NewLibrary(names, s.Read)
+	s.names = names
 	return s, nil
 }
 
-// Library is the codenav library over these sources.
-func (s *Sources) Library() *codenav.Library { return s.lib }
+// Names returns the listed Java sources' entry names, in archive order, for
+// a codenav library that reads them with Read.
+func (s *Sources) Names() []string { return s.names }
 
 // Version is the JDK's JAVA_VERSION, "" when unknown.
 func (s *Sources) Version() string { return s.version }

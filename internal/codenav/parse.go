@@ -57,6 +57,10 @@ type Type struct {
 	// Lombok-generated members have no source of their own, so navigation
 	// lands on the annotation, as JDTLS does.
 	BuilderAt, LogAt pos
+	// LogType is the type of the logger a Lombok log annotation generates
+	// (org.slf4j.Logger for @Slf4j), so log.info(...) resolves in the
+	// logging library.
+	LogType string
 	// Lombok constructor annotations: no-args, all-args, required-args (@Data/@Value too).
 	NoArgsAt, AllArgsAt, ReqArgsAt pos
 }
@@ -227,7 +231,21 @@ func (p *parser) skipAnnotation(i int) (int, string) {
 type annos struct {
 	lombok                   uint8
 	builder, logAt           pos
+	logType                  string
 	noArgs, allArgs, reqArgs pos
+}
+
+// lombokLoggers is the logger type each Lombok log annotation generates;
+// @CustomLog's is configured in lombok.config, so it has none.
+var lombokLoggers = map[string]string{
+	"Slf4j":      "org.slf4j.Logger",
+	"XSlf4j":     "org.slf4j.ext.XLogger",
+	"Log4j2":     "org.apache.logging.log4j.Logger",
+	"Log4j":      "org.apache.log4j.Logger",
+	"Log":        "java.util.logging.Logger",
+	"CommonsLog": "org.apache.commons.logging.Log",
+	"JBossLog":   "org.jboss.logging.Logger",
+	"Flogger":    "com.google.common.flogger.FluentLogger",
 }
 
 func (p *parser) skipModifiers(i int) (int, annos) {
@@ -244,8 +262,9 @@ func (p *parser) skipModifiers(i int) (int, annos) {
 			switch name {
 			case "Builder", "SuperBuilder":
 				an.builder = pos{at.Line, p.col(at)}
-			case "Slf4j", "Log4j2", "Log4j", "Log", "CommonsLog", "XSlf4j", "JBossLog", "Flogger":
+			case "Slf4j", "Log4j2", "Log4j", "Log", "CommonsLog", "XSlf4j", "JBossLog", "Flogger", "CustomLog":
 				an.logAt = pos{at.Line, p.col(at)}
+				an.logType = lombokLoggers[name]
 			case "NoArgsConstructor":
 				an.noArgs = pos{at.Line, p.col(at)}
 			case "AllArgsConstructor":
@@ -312,8 +331,24 @@ func ParseFile(path string, src []byte) *File {
 	return parseJava(src, path, newInterner(), false).f
 }
 
+// FileParser is ParseFile for a goroutine that parses many files in a row:
+// it reuses the token buffer from one file to the next. The files it returns
+// share nothing with the buffer or with src. A FileParser is not safe for
+// concurrent use; give each goroutine its own.
+type FileParser struct{ toks []token }
+
+// Parse is ParseFile.
+func (fp *FileParser) Parse(path string, src []byte) *File {
+	fp.toks = lexInto(fp.toks[:0], src)
+	return parseTokens(src, fp.toks, path, newInterner(), false).f
+}
+
 func parseJava(src []byte, rel string, in *interner, keep bool) *parsed {
-	p := &parser{src: src, toks: lex(src), in: in, keep: keep}
+	return parseTokens(src, lex(src), rel, in, keep)
+}
+
+func parseTokens(src []byte, toks []token, rel string, in *interner, keep bool) *parsed {
+	p := &parser{src: src, toks: toks, in: in, keep: keep}
 	p.f = &File{Path: rel, Imports: map[string]string{}}
 	i := 0
 	for i < len(p.toks) {
@@ -616,7 +651,7 @@ func (p *parser) parseTypeDecl(i int, outer *Type, an annos) int {
 	nameTok := i + 1
 	t := &Type{Name: p.in.s([]byte(p.txt(nameTok))), File: p.f, Outer: outer,
 		Line: p.toks[nameTok].Line, Col: p.col(p.toks[nameTok]), Lombok: an.lombok,
-		BuilderAt: an.builder, LogAt: an.logAt, NoArgsAt: an.noArgs, AllArgsAt: an.allArgs, ReqArgsAt: an.reqArgs}
+		BuilderAt: an.builder, LogAt: an.logAt, LogType: an.logType, NoArgsAt: an.noArgs, AllArgsAt: an.allArgs, ReqArgsAt: an.reqArgs}
 	switch kw {
 	case "class":
 		t.Kind = kClass

@@ -358,3 +358,96 @@ func TestLibraryConcurrentLookups(t *testing.T) {
 		seen[p] = true
 	}
 }
+
+// A JDK and two dependency jars, the way the workspace lists them: JDK entry
+// names first, then "<jar id>!<entry>" in classpath order.
+var withDeps = map[string]string{
+	"java.base/java/lang/Object.java": jdk["java.base/java/lang/Object.java"],
+	"java.base/java/lang/String.java": jdk["java.base/java/lang/String.java"],
+	"java.base/java/lang/Class.java": `package java.lang;
+
+public final class Class<T> {
+    public String getName() { return null; }
+}
+`,
+	"0!org/slf4j/Logger.java": `package org.slf4j;
+
+public interface Logger {
+    void info(String msg);
+}
+`,
+	// A jar that bundles a copy of a JDK class and of a class an earlier
+	// jar declares: neither copy is used.
+	"1!java/lang/String.java": "package java.lang;\n\npublic class String {\n}\n",
+	"1!org/slf4j/Logger.java": "package org.slf4j;\n\npublic interface Logger {\n}\n",
+	"1!org/other/Helper.java": "package org.other;\n\npublic class Helper {\n}\n",
+}
+
+func TestLibraryPathsOfDependencyJars(t *testing.T) {
+	if fqn, ok := LibraryFQN("12!org/slf4j/Logger.java"); !ok || fqn != "org.slf4j.Logger" {
+		t.Errorf("LibraryFQN of a jar entry = %q %v", fqn, ok)
+	}
+	if _, ok := LibraryFQN("12!org/slf4j/package-info.java"); ok {
+		t.Errorf("a jar's package-info declares a type")
+	}
+}
+
+// Qualifiers whose type a literal, a class literal, Iface.super or a Lombok
+// log annotation gives continue into the library; the first path that
+// declares a type wins.
+func TestLiteralQualifiersAndLoggers(t *testing.T) {
+	var paths []string
+	for p := range withDeps {
+		paths = append(paths, p)
+	}
+	sort.Slice(paths, func(a, b int) bool {
+		// JDK entries first, then the jars in id order.
+		da, db := strings.Contains(paths[a], "!"), strings.Contains(paths[b], "!")
+		if da != db {
+			return !da
+		}
+		return paths[a] < paths[b]
+	})
+	ix := NewIndex()
+	ix.SetLibrary(NewLibrary(paths, func(p string) ([]byte, error) { return []byte(withDeps[p]), nil }))
+	const path = "src/com/acme/Literals.java"
+	src := `package com.acme;
+
+import lombok.extern.slf4j.Slf4j;
+
+interface Greeter {
+    default String greet() { return ""; }
+}
+
+@Slf4j
+public class Literals implements Greeter {
+    public String greet() {
+        int n = "abc".length();
+        String s = String.class.getName();
+        log.info("x");
+        return Greeter.super.greet();
+    }
+}
+`
+	ix.Put(ParseFile(path, []byte(src)))
+	lib := func(p, needle string) Location {
+		l := declAtSrc(t, p, withDeps[p], needle)
+		l.Library = true
+		return l
+	}
+	for _, c := range []struct {
+		click string
+		want  Location
+	}{
+		{"length();", lib("java.base/java/lang/String.java", "length()")},
+		{"getName()", lib("java.base/java/lang/Class.java", "getName()")},
+		{"info(", lib("0!org/slf4j/Logger.java", "info(")},
+		{"greet();\n    }\n}", declAtSrc(t, path, src, "greet() { return")},
+	} {
+		got, ok := ix.Resolve(path, []byte(src), offsetOf(t, src, c.click, 0, 0))
+		got.rule, got.Name = "", ""
+		if !ok || got != c.want {
+			t.Errorf("%q resolved to %+v ok=%v, want %+v", c.click, got, ok, c.want)
+		}
+	}
+}

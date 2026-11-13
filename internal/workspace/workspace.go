@@ -14,25 +14,30 @@
 //     text again.
 //
 // Names the folder does not declare resolve into the JDK's sources when a JDK
-// with sources is installed. Its declarations are extracted, one file at a
-// time, into read-only copies under the state directory, which the editor
-// opens as ordinary files; a query from such a copy is answered as a JDK
-// source.
+// with sources is installed, and into the jars of the folder's Maven
+// dependencies that the local repository holds (package deps). Their
+// declarations are extracted, one file at a time, into read-only copies
+// under the state directory, which the editor opens as ordinary files; a
+// query from such a copy is answered as a library source.
 package workspace
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/codenav"
+	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/deps"
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/jdk"
 )
 
@@ -47,6 +52,13 @@ const (
 	DefaultFreshness = 2 * time.Second
 	// MaxReferences bounds a reference list.
 	MaxReferences = 5000
+	// releaseAfter is the number of files a scan parses before the memory
+	// it allocated is returned to the system right away.
+	releaseAfter = 500
+	// depsRefresh is how long the dependency jars are used before a scan
+	// reads the build files and the local repository again, so jars a build
+	// downloaded meanwhile are found without a change to a pom.xml.
+	depsRefresh = 5 * time.Minute
 )
 
 // Options configure a Workspace.
@@ -58,6 +70,9 @@ type Options struct {
 	State string
 	// FindJDK locates the JDK whose sources are used; nil disables them.
 	FindJDK func(context.Context) (jdk.JDK, bool)
+	// MavenRepo is the local Maven repository whose jars the folder's
+	// dependencies are read from; "" (or an empty State) disables them.
+	MavenRepo string
 	// ListFiles lists the files of root as slash-separated relative paths;
 	// nil uses ListFiles.
 	ListFiles func(ctx context.Context, root string) ([]string, error)
@@ -68,11 +83,13 @@ type Options struct {
 	Logf func(format string, args ...any)
 }
 
-// Doc names a document: a file of the workspace (Rel set), a JDK source
+// Doc names a document: a file of the workspace (Rel set), a library source
 // (Library set) or a file navigation does not cover (neither).
 type Doc struct {
-	Rel     string // slash-separated path relative to Root
-	Library string // the JDK entry name, for an extracted copy
+	Rel string // slash-separated path relative to Root
+	// Library is the library path of an extracted copy: a JDK entry name,
+	// or a dependency's "<key>!a/b/C.java" (see package deps).
+	Library string
 }
 
 // Covered reports whether navigation answers queries from d.
@@ -101,7 +118,11 @@ type Workspace struct {
 	scan      *scanRun // the scan in flight, nil when idle
 	stale     bool     // a change was reported after scannedAt
 	sources   *jdk.Sources
-	looked    bool // the JDK was looked for
+	looked    bool             // the JDK was looked for
+	deps      *deps.Set        // the dependency jars, nil until listed
+	poms      map[string]stamp // the pom.xml files deps was read from
+	depsAt    time.Time        // when deps was read
+	lib       *codenav.Library // the JDK and deps, as the index looks names up
 }
 
 type stamp struct {
@@ -141,11 +162,16 @@ func (w *Workspace) DocOf(file string) Doc {
 		return Doc{}
 	}
 	w.mu.Lock()
-	s := w.sources
+	s, ds := w.sources, w.deps
 	w.mu.Unlock()
 	if s != nil && w.opt.State != "" {
 		if name, ok := s.EntryOf(w.opt.State, file); ok {
 			return Doc{Library: name}
+		}
+	}
+	if ds != nil && w.opt.State != "" {
+		if p, ok := ds.PathOf(w.opt.State, file); ok {
+			return Doc{Library: p}
 		}
 	}
 	rel, err := filepath.Rel(w.opt.Root, file)
@@ -282,10 +308,10 @@ func (w *Workspace) resolve(d Doc, text []byte, off int) (codenav.Location, bool
 		return loc, true, nil
 	}
 	w.mu.Lock()
-	s := w.sources
+	lib := w.lib
 	w.mu.Unlock()
-	if s != nil {
-		if err := s.Library().Err(); err != nil {
+	if lib != nil {
+		if err := lib.Err(); err != nil {
 			return loc, false, fmt.Errorf("go to definition: %w", err)
 		}
 	}
@@ -300,9 +326,23 @@ func (w *Workspace) target(l codenav.Location) (Target, error) {
 		return t, nil
 	}
 	w.mu.Lock()
-	s := w.sources
+	s, ds := w.sources, w.deps
 	w.mu.Unlock()
-	if s == nil || w.opt.State == "" {
+	if w.opt.State == "" {
+		return Target{}, errors.New("no state directory for library sources")
+	}
+	if strings.Contains(l.Path, deps.Sep) {
+		if ds == nil {
+			return Target{}, errors.New("no dependency jars")
+		}
+		file, err := ds.Extract(w.opt.State, l.Path)
+		if err != nil {
+			return Target{}, err
+		}
+		t.File = file
+		return t, nil
+	}
+	if s == nil {
 		return Target{}, errors.New("no JDK sources")
 	}
 	file, err := s.Extract(w.opt.State, l.Path)
@@ -419,6 +459,8 @@ func (w *Workspace) runScan(run *scanRun) {
 	started := time.Now()
 	w.mu.Lock()
 	old := w.stamps
+	oldPoms := w.poms
+	depsAt := w.depsAt
 	w.stale = false
 	lookJDK := w.opt.FindJDK != nil && (!w.looked || w.sources != nil && w.sources.Changed())
 	if lookJDK {
@@ -426,8 +468,8 @@ func (w *Workspace) runScan(run *scanRun) {
 	}
 	w.mu.Unlock()
 
-	// Listing src.zip takes about as long as a first scan (Viff ADR 0041),
-	// so the two run side by side.
+	// Listing src.zip and the dependency jars takes about as long as a first
+	// scan (Viff ADR 0041), so they run side by side with it.
 	var found *jdk.Sources
 	var jdkErr error
 	listed := make(chan struct{})
@@ -441,23 +483,56 @@ func (w *Workspace) runScan(run *scanRun) {
 	} else {
 		close(listed)
 	}
-	res, err := w.scanFiles(ctx, old)
+	all, err := w.opt.ListFiles(ctx, w.opt.Root)
+	if err != nil {
+		err = fmt.Errorf("list source files: %w", err)
+	}
+	poms := w.pomStamps(all)
+	lookDeps := err == nil && w.opt.MavenRepo != "" && w.opt.State != "" &&
+		(oldPoms == nil || !sameStamps(oldPoms, poms) || time.Since(depsAt) > depsRefresh)
+	var depSet *deps.Set
+	var depsErr error
+	depsDone := make(chan struct{})
+	if lookDeps {
+		go func() {
+			defer close(depsDone)
+			depSet, depsErr = w.readDeps(ctx, poms)
+		}()
+	} else {
+		close(depsDone)
+	}
+	var res scanResult
+	if err == nil {
+		res, err = w.scanFiles(ctx, all, old)
+	}
 	<-listed
+	<-depsDone
 
 	w.mu.Lock()
+	changed := false
 	if lookJDK {
 		if jdkErr != nil {
 			w.opt.Logf("JDK sources unavailable: %v", jdkErr)
 		}
 		if found != nil || jdkErr == nil {
 			w.sources = found
+			changed = true
 		}
-		var lib *codenav.Library
 		if w.sources != nil {
-			lib = w.sources.Library()
 			w.opt.Logf("JDK sources: %s (%s)", w.sources.Archive(), w.sources.Version())
 		}
-		w.ix.SetLibrary(lib)
+	}
+	if lookDeps {
+		if depsErr != nil {
+			w.opt.Logf("dependency jars unavailable: %v", depsErr)
+		} else {
+			w.deps, w.poms, w.depsAt = depSet, poms, started
+			changed = true
+		}
+	}
+	if changed {
+		w.lib = w.library()
+		w.ix.SetLibrary(w.lib)
 	}
 	if err == nil {
 		for _, p := range res.removed {
@@ -478,6 +553,82 @@ func (w *Workspace) runScan(run *scanRun) {
 	w.scan = nil
 	w.mu.Unlock()
 	close(run.done)
+	if len(res.parsed) >= releaseAfter || lookDeps {
+		// Indexing a tree allocates several times the index it leaves; the
+		// runtime would keep those pages and return them only slowly, so a
+		// first scan of a large tree would hold about three times the
+		// memory the index needs for minutes. Returning them now takes one
+		// collection, after the waiting queries were released.
+		debug.FreeOSMemory()
+	}
+}
+
+// library is the codenav library over the JDK's sources and the dependency
+// jars, the JDK first so a jar that bundles JDK classes never shadows them.
+// The caller holds w.mu.
+func (w *Workspace) library() *codenav.Library {
+	var paths []string
+	s, ds := w.sources, w.deps
+	if s != nil {
+		paths = append(paths, s.Names()...)
+	}
+	if ds != nil {
+		paths = append(paths, ds.Paths()...)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return codenav.NewLibrary(paths, func(p string) ([]byte, error) {
+		if strings.Contains(p, deps.Sep) {
+			return ds.Read(p)
+		}
+		return s.Read(p)
+	})
+}
+
+// pomStamps returns the size and modification time of the folder's
+// pom.xml files among all, the folder's files.
+func (w *Workspace) pomStamps(all []string) map[string]stamp {
+	out := map[string]stamp{}
+	for _, p := range all {
+		if path.Base(p) != "pom.xml" {
+			continue
+		}
+		if fi, err := os.Stat(w.abs(p)); err == nil && fi.Mode().IsRegular() {
+			out[p] = stamp{size: fi.Size(), mod: fi.ModTime()}
+		}
+	}
+	return out
+}
+
+func sameStamps(a, b map[string]stamp) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if o, ok := b[k]; !ok || !o.same(v) {
+			return false
+		}
+	}
+	return true
+}
+
+// readDeps lists the jars of the Maven dependencies the poms declare.
+func (w *Workspace) readDeps(ctx context.Context, poms map[string]stamp) (*deps.Set, error) {
+	if len(poms) == 0 {
+		return deps.Open(nil, w.opt.Logf), nil
+	}
+	files := make([]string, 0, len(poms))
+	for p := range poms {
+		files = append(files, w.abs(p))
+	}
+	jars, err := deps.MavenJars(ctx, files, w.opt.MavenRepo, w.opt.Logf)
+	if err != nil {
+		return nil, err
+	}
+	set := deps.Open(jars, w.opt.Logf)
+	w.opt.Logf("dependency jars: %d of %d resolved, %d classes", set.Len(), len(jars), set.Classes())
+	return set, nil
 }
 
 // scanResult is what changed since the previous scan.
@@ -487,14 +638,10 @@ type scanResult struct {
 	stamps  map[string]stamp
 }
 
-// scanFiles lists the folder's Java files and parses those that are new or
-// changed since old. Files that disappeared, became unreadable or grew past
-// MaxFileSize are reported as removed.
-func (w *Workspace) scanFiles(ctx context.Context, old map[string]stamp) (scanResult, error) {
-	all, err := w.opt.ListFiles(ctx, w.opt.Root)
-	if err != nil {
-		return scanResult{}, fmt.Errorf("list source files: %w", err)
-	}
+// scanFiles parses the Java files among all, the folder's files, that are new
+// or changed since old. Files that disappeared, became unreadable or grew
+// past MaxFileSize are reported as removed.
+func (w *Workspace) scanFiles(ctx context.Context, all []string, old map[string]stamp) (scanResult, error) {
 	var paths []string
 	for _, p := range all {
 		if codenav.Supports(p) {
@@ -511,6 +658,10 @@ func (w *Workspace) scanFiles(ctx context.Context, old map[string]stamp) (scanRe
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// The file's bytes and tokens are scratch once its declarations
+			// are read, so each worker reuses one buffer of each.
+			var fp codenav.FileParser
+			var buf []byte
 			for i := range next {
 				p := paths[i]
 				full := w.abs(p)
@@ -523,12 +674,13 @@ func (w *Workspace) scanFiles(ctx context.Context, old map[string]stamp) (scanRe
 					stamps[i], indexed[i] = st, true
 					continue
 				}
-				src, err := os.ReadFile(full)
+				src, err := readInto(buf, full)
 				if err != nil {
 					continue
 				}
+				buf = src
 				stamps[i], indexed[i] = st, true
-				parsed[i] = codenav.ParseFile(p, src)
+				parsed[i] = fp.Parse(p, src)
 			}
 		}()
 	}
@@ -562,3 +714,31 @@ func (w *Workspace) scanFiles(ctx context.Context, old map[string]stamp) (scanRe
 }
 
 func workers() int { return min(runtime.GOMAXPROCS(0), 8) }
+
+// readInto reads the file at path into buf, growing it when the file does
+// not fit, and returns the bytes read. A file that grew past MaxFileSize
+// since it was listed is refused.
+func readInto(buf []byte, path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf = buf[:0]
+	for {
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+		n, err := f.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if len(buf) > MaxFileSize {
+			return nil, fmt.Errorf("%s: larger than %d bytes", path, MaxFileSize)
+		}
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}

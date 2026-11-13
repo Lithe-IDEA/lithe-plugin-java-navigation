@@ -723,7 +723,7 @@ func (q *qctx) findField(t *Type, name string) *Member {
 	if name == "log" {
 		for _, ht := range h {
 			if ht.LogAt.Line >= 0 {
-				return &Member{Name: name, Kind: kField, Owner: ht, Line: ht.LogAt.Line, Col: ht.LogAt.Col}
+				return &Member{Name: name, Kind: kField, Type: ht.LogType, Owner: ht, Line: ht.LogAt.Line, Col: ht.LogAt.Col}
 			}
 		}
 	}
@@ -873,11 +873,25 @@ func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
 	q.depth++
 	defer func() { q.depth-- }()
 	switch {
+	case p.toks[end].Kind == tString: // "text".trim(), and text blocks
+		return q.impliedType("java.lang.String")
 	case p.ident(end):
 		s := p.txt(end)
 		if p.is(end-1, ".") {
-			if s == "this" { // Outer.this
+			switch s {
+			case "this": // Outer.this
 				return q.resolveSimple(p.txt(end-2), q.file, ctx)
+			case "class": // Foo.class.getName()
+				return q.impliedType("java.lang.Class")
+			case "super": // Iface.super.m(): the interface; Outer.super.m(): Outer's superclass
+				t := q.resolveSimple(p.txt(end-2), q.file, ctx)
+				if t == nil || t.Kind == kInterface {
+					return t
+				}
+				if ss := q.superTypes(t); len(ss) > 0 {
+					return ss[0]
+				}
+				return nil
 			}
 			ot := q.typeOfExpr(end-2, ctx)
 			if ot == nil {

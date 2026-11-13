@@ -21,6 +21,7 @@
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
 | 跳进依赖库 | Maven 项目的依赖（含传递依赖）从本地仓库读：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
 | 老项目的 jar | 没有 Maven 的 Ant、Eclipse、MyEclipse 项目，读 `.classpath` 里列出的 jar（含 `M2_REPO` 变量和 `sourcepath`），以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
+| Eclipse 容器 | `.classpath` 里的服务器运行时容器（Tomcat、Jetty、WildFly 等）和 JUnit 容器换成本机已有的 jar，`HttpServletRequest`、`@WebServlet`、`@Test` 都能跳；没有 pom 的 `WEB-INF/web.xml` Web 项目同样补上 Servlet/JSP API |
 | 生成代码 | 模块的 `target/generated-sources`（protobuf、注解处理器）和 Gradle 的 `build/generated` 也进索引，即使被 `.gitignore` 忽略 |
 | 查找引用 | 只列出能跳回这个声明的出现，所以列表和在任一行上跳转的结果一致；`package`/`import` 不算引用 |
 | 文档结构 | 类型、成员和嵌套类型的大纲（`textDocument/documentSymbol`） |
@@ -45,6 +46,13 @@
   `WEB-INF/lib`、`WebContent/WEB-INF/lib`、`WebRoot/WEB-INF/lib` 等即使被 `.gitignore` 忽略也会读。源码取
   `.classpath` 的 `sourcepath`，或旁边的 `-sources.jar`、`-src.zip`；源码包不是按包名放的（比如整个源码树打的 zip）就不用，改用存根。
   这些 jar 只读，不会被修改。
+- Eclipse 容器（`kind="con"`）：服务器运行时容器按运行时名字判断包名（Tomcat 10+、Jetty 11+、WildFly 27+、
+  GlassFish/Payara 6+、TomEE 9+ 用 `jakarta.servlet`，更早的用 `javax.servlet`），先找本机装的服务器
+  （`CATALINA_HOME`/`CATALINA_BASE`、Homebrew、`/opt`、`/usr/share`、Windows 的 `Program Files`、`~/apache-tomcat-*`）
+  的 `lib` 里包名对得上的 `servlet-api.jar`、`jsp-api.jar`、`el-api.jar`，没有就从本地 Maven 仓库取包名对得上的最新
+  Servlet API 和 JSP API；`JUNIT_CONTAINER/3`、`/4`、`/5` 取本地仓库里对应大版本的最新 JUnit（4 加上 hamcrest-core）。
+  项目自己已经带了 Servlet 或 JUnit 的 jar 时不再补。没有 `pom.xml`/Gradle 构建文件、但有 `WEB-INF/web.xml` 的
+  项目按 Servlet 容器处理（web.xml 用 Jakarta EE 命名空间时取 `jakarta.servlet`）。不联网下载，本机都没有就跳过。
 - `pom.xml`、`.classpath` 或上面任一个 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
 - JDK：按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
   （含 IntelliJ 的 `~/.jdks`、SDKMAN!）的顺序找第一个带 `src.zip` 的 JDK。只预先列出 zip 目录，某个类第一次被查到时才解析。
@@ -96,9 +104,11 @@
 | [Apache Ant](https://github.com/apache/ant) | 2000 年起的老项目，`src/main/org` | 99.1% | 0.19 ms / 1.3 ms | 56 ms | 29 MiB |
 | [Struts 1](https://github.com/apache/struts1) | 已归档的老框架，JSF/JSP | 97.5% | 0.16 ms / 1.8 ms | 44 ms | 22 MiB |
 | [JForum 2](https://github.com/rafaelsteil/jforum2) | 已归档的 Ant 项目，jar 提交在 `WEB-INF/lib`，没有 pom | 99.3%（读工作区 jar 之前 95.9%） | 0.15 ms / 1.4 ms | 37 ms | 20 MiB |
+| [javaee-blog](https://github.com/Lemonreds/javaee-blog) | Eclipse 动态 Web 项目，Servlet + JSP，Tomcat 7 运行时容器，没有 pom | 100%（解析容器之前 91.7%） | 0.08 ms / 0.94 ms | 34 ms | 17 MiB |
+| [OpenCms](https://github.com/alkacon/opencms-core) | 2000 年起的 JSP CMS，Gradle | 94.1% | 0.20 ms / 2.0 ms | 0.13 s | 54 MiB |
 
 剩下没跳到的主要是：依赖没在项目里声明或本地仓库没有（JFinal 的 Servlet 依赖在 pom 里被注释掉了，Struts 的
-JSF 依赖没下载过）、数组的 `.length`（JDT LS 也不跳）、`java.util.Date` 这种全限定名里的包名段，以及 lambda 参数。
+JSF 依赖没下载过，OpenCms 的 Gradle 依赖读不了）、数组的 `.length`（JDT LS 也不跳）、`java.util.Date` 这种全限定名里的包名段，以及 lambda 参数。
 
 ## 限制
 
@@ -110,6 +120,7 @@ JSF 依赖没下载过）、数组的 `.length`（JDT LS 也不跳）、`java.ut
   变量和字段声明的类型、能跟下去的调用链），都看不出时取第一个；lambda 参数的类型和泛型替换后的返回类型推不出来，
   例如 `list.get(0).getName()` 里的 `getName`、`users.stream().map(u -> u.getName())` 里的 `getName`；
   按泛型实参才能区分的重载也会取第一个。
+- **`.jsp` 文件里不能跳转**：插件只处理 `.java` 文件，JSP 里的 `<% %>` 脚本、`<jsp:useBean>`、EL 表达式和标签库都不跳。
 - **只认一个 JDK**：用的是上面顺序找到的 JDK，不一定是项目编译用的版本。
 - **引用不含重写和实现**：查找方法的引用不包括子类重写的方法和通过接口调用到的其他声明。
 - **和 Java Support（JDT LS）同时安装**：两个插件都为 Java 声明语言服务器，宿主怎么分配请求还没有定义，暂时不要同时启用。

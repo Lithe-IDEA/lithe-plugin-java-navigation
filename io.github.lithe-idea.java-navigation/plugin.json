@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-navigation",
   "displayName": "Java Navigation",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "pluginAPIVersion": 0,
   "requires": {
     "languageServers": 0,

@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -29,10 +29,18 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -timeout=120s -race -count=1 ./...
 
   package:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +52,10 @@ jobs:
           node-version: 22
       - name: Check manifest and build the archives
         run: node scripts/package.mjs
+      - name: Verify Linux release archives
+        run: node --test --test-timeout=60000 scripts/package/*.test.mjs
+      - name: Start the packaged Linux language server
+        run: node scripts/package/smoke-linux.mjs dist/*-linux-${{ matrix.arch }}.zip
       - name: Validate against Lithe Store rules
         run: |
           git clone --depth 1 https://github.com/Lithe-IDEA/Lithe-store "$RUNNER_TEMP/store"

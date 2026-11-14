@@ -21,6 +21,8 @@ const PACKAGE_DIR = "io.github.lithe-idea.java-navigation";
 const ASSET_PREFIX = "java-navigation";
 const BINARY = "java-navigation";
 const TARGETS = [
+  { platform: "linux-arm64", goos: "linux", goarch: "arm64" },
+  { platform: "linux-x64", goos: "linux", goarch: "amd64" },
   { platform: "darwin-arm64", goos: "darwin", goarch: "arm64" },
   { platform: "darwin-x64", goos: "darwin", goarch: "amd64" },
   { platform: "windows-x64", goos: "windows", goarch: "amd64" },
@@ -66,7 +68,7 @@ for (const target of targets) {
   execFileSync(
     "go",
     ["build", "-trimpath", "-ldflags", `-s -w -buildid= -X main.version=${manifest.version}`, "-o", join(pkg, "bin", exe), "./cmd/java-navigation"],
-    { stdio: "inherit", env: { ...process.env, CGO_ENABLED: "0", GOOS: target.goos, GOARCH: target.goarch } },
+    { stdio: "inherit", timeout: 120_000, env: { ...process.env, CGO_ENABLED: "0", GOOS: target.goos, GOARCH: target.goarch } },
   );
   chmodSync(join(pkg, "bin", exe), 0o755);
   const platformManifest = structuredClone(manifest);
@@ -78,7 +80,7 @@ for (const target of targets) {
   const asset = resolve("dist", name);
   // -X drops extra file attributes; -y stores a symbolic link as a link so
   // Lithe refuses it instead of the archive silently carrying its target.
-  execFileSync("zip", ["-qrXy", asset, PACKAGE_DIR, "-x", "*.DS_Store"], { cwd: staging });
+  execFileSync("zip", ["-qrXy", asset, PACKAGE_DIR, "-x", "*.DS_Store"], { cwd: staging, timeout: 30_000 });
   const sha256 = createHash("sha256").update(readFileSync(asset)).digest("hex");
   console.log(`dist/${name} ${sha256}`);
 }

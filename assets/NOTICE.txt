@@ -1,0 +1,7 @@
+java-support-lite.svg and java-support-lite_dark.svg are modified versions of
+java.svg from the JetBrains IntelliJ Platform Community repository
+(https://github.com/JetBrains/intellij-community), platform/icons/src/fileTypes,
+Copyright 2000-2023 JetBrains s.r.o. and contributors, licensed under the Apache
+License 2.0 in LICENSE-APACHE-2.0.txt. Lithe changed the filled cup to an
+outline and added a lightning bolt. These icons are only used by the Lithe Store
+listing and are not part of the plugin package.

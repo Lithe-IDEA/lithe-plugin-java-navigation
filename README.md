@@ -1,11 +1,13 @@
-# Java Navigation for Lithe
+# Java Support Lite for Lithe
 
+[Java Support](https://github.com/Lithe-IDEA/lithe-plugin-java) 的轻量版（插件 ID 仍是 `io.github.lithe-idea.java-navigation`，0.0.2 及以前叫 Java Navigation）。
 为 [Lithe](https://github.com/1lck/Lithe-IDEA) 提供**不依赖 JDT LS 的轻量 Java 跳转**：跳转到定义、查找引用和文档结构，
 能跳进 JDK 和 Maven 依赖库。插件自带一个用 Go 写的小型语言服务器，不需要 JDK 运行时、不运行 Maven，
 打开项目后第一次跳转约 0.2–0.5 秒就能用，常驻内存 60–90 MiB（同一个项目 JDT LS 要 3 GB，导入要 1 分钟）。
 这是一个**社区插件**，按插件契约 v0 编写。
 
-> English: lightweight Java navigation for Lithe without JDT LS — go to definition, find references and the
+> English: Java Support Lite, the lightweight edition of Java Support (plugin ID `io.github.lithe-idea.java-navigation`,
+> named Java Navigation up to 0.0.2): lightweight Java navigation for Lithe without JDT LS — go to definition, find references and the
 > document outline, into the JDK and Maven dependency jars, served by a small Go language server that keeps
 > an index of declarations only. No JDK runtime, no build import, 60–90 MiB of memory.
 
@@ -123,7 +125,10 @@ JSF 依赖没下载过，OpenCms 的 Gradle 依赖读不了）、数组的 `.len
 - **`.jsp` 文件里不能跳转**：插件只处理 `.java` 文件，JSP 里的 `<% %>` 脚本、`<jsp:useBean>`、EL 表达式和标签库都不跳。
 - **只认一个 JDK**：用的是上面顺序找到的 JDK，不一定是项目编译用的版本。
 - **引用不含重写和实现**：查找方法的引用不包括子类重写的方法和通过接口调用到的其他声明。
-- **和 Java Support（JDT LS）同时安装**：两个插件都为 Java 声明语言服务器，宿主怎么分配请求还没有定义，暂时不要同时启用。
+- **和 Java Support 二选一**：两个插件都为 Java 提供语言服务器，Lithe 同一时间只让一个已启用的插件服务一门语言。
+  启用或安装其中一个，另一个会被自动停用，Lithe 会提示停用了哪个（需要包含
+  [Lithe-core-rust#39](https://github.com/Lithe-IDEA/Lithe-core-rust/pull/39) 的桌面端；更早的预览版里两个都启用时，
+  只有其中一个能用）。要补全、诊断、运行和调试，请改用 Java Support。
 
 ## 开发
 

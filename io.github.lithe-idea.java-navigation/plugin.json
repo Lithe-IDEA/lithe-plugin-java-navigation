@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-navigation",
   "displayName": "Java Support Lite",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "pluginAPIVersion": 0,
   "requires": {
     "languageServers": 0,

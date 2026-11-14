@@ -164,3 +164,7 @@ go run ./cmd/java-navigation --version
 ## 许可
 
 Apache License 2.0，见 `LICENSE`。`internal/codenav` 等来自 Viff 的代码按 MIT 许可，见 `THIRD_PARTY_NOTICES.md`。
+
+## Linux ARM64 / x64
+
+Linux 构建、资源归属与原生验证入口见 [Linux 构建与验证](docs/linux-packaging.md)。

@@ -21,7 +21,7 @@ const maxNesting = 8
 
 // stubHeader starts every stub; origin names the jar.
 func stubHeader(origin string) string {
-	return "// Signatures read from " + origin + " by Java Navigation; no sources are attached.\n"
+	return "// Signatures read from " + origin + " by Java Support Lite; no sources are attached.\n"
 }
 
 type stubWriter struct {

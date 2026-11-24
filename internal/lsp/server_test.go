@@ -161,16 +161,17 @@ public class Circle implements Shape {
 
 	var init struct {
 		Capabilities struct {
-			PositionEncoding   string `json:"positionEncoding"`
-			DefinitionProvider bool   `json:"definitionProvider"`
-			ReferencesProvider bool   `json:"referencesProvider"`
+			PositionEncoding       string `json:"positionEncoding"`
+			DefinitionProvider     bool   `json:"definitionProvider"`
+			ImplementationProvider bool   `json:"implementationProvider"`
+			ReferencesProvider     bool   `json:"referencesProvider"`
 		} `json:"capabilities"`
 	}
 	c.call("initialize", map[string]any{
 		"processId": nil, "rootUri": uriOf(root),
 		"capabilities": map[string]any{"textDocument": map[string]any{"documentSymbol": map[string]any{"hierarchicalDocumentSymbolSupport": true}}},
 	}, &init)
-	if init.Capabilities.PositionEncoding != "utf-16" || !init.Capabilities.DefinitionProvider || !init.Capabilities.ReferencesProvider {
+	if init.Capabilities.PositionEncoding != "utf-16" || !init.Capabilities.DefinitionProvider || !init.Capabilities.ImplementationProvider || !init.Capabilities.ReferencesProvider {
 		t.Fatalf("capabilities = %+v", init.Capabilities)
 	}
 	c.notify("initialized", map[string]any{})
@@ -233,6 +234,47 @@ public class Circle implements Shape {
 	}
 	if got, want := strings.Join(outline, ","), "Circle/5,  r/8,  Circle/9,  area/6,  Unit/10"; got != want {
 		t.Errorf("outline = %s, want %s", got, want)
+	}
+
+	// Implementations from Shape.area() and superDeclarations from Circle.area().
+	circleURI := uriOf(filepath.Join(root, "src/a/Circle.java"))
+	var impls []Location
+	c.call("textDocument/implementation", map[string]any{
+		"textDocument": map[string]any{"uri": shapeURI}, "position": Position{3, 12},
+	}, &impls)
+	if len(impls) != 1 || impls[0].URI != circleURI || impls[0].Range.Start.Line != 8 {
+		t.Errorf("implementations of Shape.area = %+v, want Circle.area on line 8", impls)
+	}
+
+	var supers []Location
+	c.call("javaNavigation/superDeclarations", map[string]any{
+		"textDocument": map[string]any{"uri": circleURI}, "position": Position{8, 18},
+	}, &supers)
+	if len(supers) != 1 || supers[0].URI != shapeURI || supers[0].Range.Start.Line != 3 {
+		t.Errorf("superDeclarations of Circle.area = %+v, want Shape.area on line 3", supers)
+	}
+
+	var markerResp struct {
+		Markers []struct {
+			Line      int    `json:"line"`
+			Direction string `json:"direction"`
+			Relation  string `json:"relation"`
+			Targets   []struct {
+				Name     string   `json:"name"`
+				Location Location `json:"location"`
+			} `json:"targets"`
+		} `json:"markers"`
+	}
+	c.call("javaNavigation/markers", map[string]any{
+		"textDocument": map[string]any{"uri": circleURI},
+	}, &markerResp)
+	if len(markerResp.Markers) != 2 {
+		t.Errorf("Circle navigation markers = %+v, want 2 (class up + area up)", markerResp.Markers)
+	}
+	for _, m := range markerResp.Markers {
+		if m.Direction != "up" || m.Relation != "interface" {
+			t.Errorf("Circle marker = %+v, want up/interface", m)
+		}
 	}
 
 	// An unsupported request is refused, not ignored.

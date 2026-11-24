@@ -247,6 +247,103 @@ func (w *Workspace) Definition(ctx context.Context, d Doc, text []byte, off int)
 	return t, true, nil
 }
 
+// MarkerTarget pairs a display name with a resolved workspace or library Target.
+type MarkerTarget struct {
+	Name   string
+	Target Target
+}
+
+// Marker describes one bidirectional inheritance or implementation gutter icon.
+type Marker struct {
+	Line      int
+	Column    int
+	Direction string
+	Relation  string
+	Targets   []MarkerTarget
+}
+
+// Implementations returns all subtypes or overriding/implementing methods for
+// the symbol at byte offset off of text, the editor's content of d.
+func (w *Workspace) Implementations(ctx context.Context, d Doc, text []byte, off int) ([]Target, error) {
+	return w.resolveLocationList(ctx, d, text, off, w.ix.LibraryImplementations, w.ix.Implementations)
+}
+
+// SuperDeclarations returns direct supertype or ancestor method declarations
+// for the symbol at byte offset off of text, the editor's content of d.
+func (w *Workspace) SuperDeclarations(ctx context.Context, d Doc, text []byte, off int) ([]Target, error) {
+	return w.resolveLocationList(ctx, d, text, off, w.ix.LibrarySuperDeclarations, w.ix.SuperDeclarations)
+}
+
+func (w *Workspace) resolveLocationList(
+	ctx context.Context,
+	d Doc,
+	text []byte,
+	off int,
+	libFn, wsFn func(string, []byte, int) []codenav.Location,
+) ([]Target, error) {
+	if !d.Covered() {
+		return nil, nil
+	}
+	if err := w.ensure(ctx); err != nil {
+		return nil, err
+	}
+	var locs []codenav.Location
+	if d.Library != "" {
+		locs = libFn(d.Library, text, off)
+	} else {
+		locs = wsFn(d.Rel, text, off)
+	}
+	out := make([]Target, 0, len(locs))
+	for _, l := range locs {
+		t, err := w.target(l)
+		if err != nil {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// NavigationMarkers returns verified bidirectional inheritance/implementation
+// gutter markers for d.
+func (w *Workspace) NavigationMarkers(ctx context.Context, d Doc, text []byte) ([]Marker, error) {
+	if !d.Covered() {
+		return nil, nil
+	}
+	if err := w.ensure(ctx); err != nil {
+		return nil, err
+	}
+	var raw []codenav.NavMarker
+	if d.Library != "" {
+		raw = w.ix.LibraryNavigationMarkers(d.Library, text)
+	} else {
+		raw = w.ix.NavigationMarkers(d.Rel, text)
+	}
+	out := make([]Marker, 0, len(raw))
+	for _, m := range raw {
+		targets := make([]MarkerTarget, 0, len(m.Targets))
+		for _, mt := range m.Targets {
+			t, err := w.target(mt.Location)
+			if err != nil {
+				continue
+			}
+			targets = append(targets, MarkerTarget{Name: mt.Name, Target: t})
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		out = append(out, Marker{
+			Line:      m.Line,
+			Column:    m.Column,
+			Direction: m.Direction,
+			Relation:  m.Relation,
+			Targets:   targets,
+		})
+	}
+	return out, nil
+}
+
+
 // References lists the places that refer to the declaration named at byte
 // offset off of text, the editor's content of d, in path, line and column
 // order; with decl set the declaration itself comes first. Only occurrences

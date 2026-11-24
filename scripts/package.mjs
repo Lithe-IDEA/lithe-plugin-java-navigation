@@ -29,7 +29,7 @@ const TARGETS = [
   { platform: "windows-arm64", goos: "windows", goarch: "arm64" },
 ];
 // Files copied next to plugin.json in every archive.
-const INCLUDED = ["LICENSE", "THIRD_PARTY_NOTICES.md"];
+const INCLUDED = ["LICENSE", "THIRD_PARTY_NOTICES.md", "vendor/LICENSE"];
 
 const manifest = JSON.parse(readFileSync(`${PACKAGE_DIR}/plugin.json`, "utf8"));
 const problems = [];
@@ -40,6 +40,10 @@ if (manifest.id === "dev.lithe" || manifest.id.startsWith("dev.lithe.")) problem
 const servers = manifest.languageServers ?? [];
 if (servers.length !== 1 || servers[0].launch?.kind !== "packaged" || servers[0].launch?.path !== `bin/${BINARY}`) {
   problems.push(`plugin.json must declare one packaged language server at bin/${BINARY}`);
+}
+const backend = manifest.backend;
+if (backend?.launch?.kind !== "packaged" || backend?.launch?.path !== `bin/${BINARY}`) {
+  problems.push(`plugin.json must declare a packaged backend at bin/${BINARY}`);
 }
 
 const tagFlag = process.argv.indexOf("--expect-tag");
@@ -73,8 +77,13 @@ for (const target of targets) {
   chmodSync(join(pkg, "bin", exe), 0o755);
   const platformManifest = structuredClone(manifest);
   platformManifest.languageServers[0].launch.path = `bin/${exe}`;
+  platformManifest.backend.launch.path = `bin/${exe}`;
   writeFileSync(join(pkg, "plugin.json"), `${JSON.stringify(platformManifest, null, 2)}\n`);
-  for (const file of INCLUDED) copyFileSync(file, join(pkg, file));
+  for (const file of INCLUDED) {
+    const dest = join(pkg, file);
+    mkdirSync(join(dest, ".."), { recursive: true });
+    copyFileSync(file, dest);
+  }
 
   const name = `${ASSET_PREFIX}-${manifest.version}-${target.platform}.zip`;
   const asset = resolve("dist", name);

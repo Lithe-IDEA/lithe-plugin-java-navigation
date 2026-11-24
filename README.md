@@ -19,6 +19,7 @@
 | 功能 | 说明 |
 | --- | --- |
 | 跳转到定义 | 类型、方法、构造器、字段、枚举常量、局部变量、参数、类型参数、注解及其属性；按导入、同包、通配导入、嵌套、继承链、调用参数个数和实参类型解析，支持调用链 `a.b().c` 和 `Foo.<T>bar()` |
+| 实现 / 父类双向跳转 | 接口/父类向下跳转到实现类与重写方法（`textDocument/implementation`），实现类/重写方法向上跳回接口与父类声明（`javaNavigation/superDeclarations`），并在行首绘制绿色 `I↓`/`I↑` 与蓝色 `O↓`/`O↑` 导航图标 |
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
 | 跳进依赖库 | Maven 项目的依赖（含传递依赖）从本地仓库读：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
@@ -146,15 +147,18 @@ go run ./cmd/nav-bench -h         # 在真实项目上测命中率、延迟和�
 `testdata/stubs`，并把 `stubFormat` 加一，让旧版本解压的副本不再被复用。
 
 `dist/` 里每个平台一个 zip（`darwin-arm64`、`darwin-x64`、`windows-x64`、`windows-arm64`），包内只有
-`plugin.json`、`bin/java-navigation`（Windows 是 `bin/java-navigation.exe`，对应平台包的 `plugin.json` 也写这个路径）、
-`LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
+`plugin.json`、`bin/java-navigation`（Windows 是 `bin/java-navigation.exe`，对应平台包的 `plugin.json` 为语言服务器与 `--backend` 后端均写这个路径）、
+`LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `vendor/LICENSE`。
 
-语言服务器可以单独运行调试：
+语言服务器和后端都可以单独运行调试：
 
 ```sh
 go run ./cmd/java-navigation --state-dir /tmp/jn-state   # 通过 stdin/stdout 说 LSP，日志写 stderr
+go run ./cmd/java-navigation --backend                   # 以 Lithe 插件后端运行（经 litheLogging 上报日志，不写 stderr）
 go run ./cmd/java-navigation --version
 ```
+
+双向导航后端复用随仓固定的 Go SDK（见 `sdk.lock.json`），将高频收集 `javaNavigation.collect` 设为静默成功、用户点击 `javaNavigation.invoke` 作为关键操作由 SDK 自动记 `INFO`，注册或上下文读取失败通过 `degraded` 上报受控类别（`nav.actions_registration_failed`、`nav.contexts_unavailable`），不写本地文件也不输出路径或源码。
 
 ## 发布
 

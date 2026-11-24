@@ -35,3 +35,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Lithe Plugin Go SDK
+
+- Source: https://github.com/Lithe-IDEA/Lithe-core-rust (`shared/plugins/sdk/go/lithe`, revision `0d79e17fde389f559bcb3eeeb11baace13895576`)
+- Used in: `internal/lithesdk/lithe/` (copied verbatim from upstream without modifications; checksums pinned in `sdk.lock.json`)
+- License: see `vendor/LICENSE`

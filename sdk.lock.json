@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/Lithe-IDEA/Lithe-core-rust",
+    "revision": "0d79e17fde389f559bcb3eeeb11baace13895576"
+  },
+  "files": [
+    {
+      "upstream": "shared/plugins/LICENSE",
+      "path": "vendor/LICENSE",
+      "sha256": "93ff573f89d32394501fcc82767e73b1824add861f088bbd3eec9e0afae20d21"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/backend.go",
+      "path": "internal/lithesdk/lithe/backend.go",
+      "sha256": "4a1c2c4d68cac20f93312c58f63b49615cdf05f3d6061f9330a7dcb18fe4f38e"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/cancellation.go",
+      "path": "internal/lithesdk/lithe/cancellation.go",
+      "sha256": "bb6f16abf2ce8b0405f0b7fd9a4621d6c1293e6ec0bfab5313b219b37b0856b8"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/diagnostics.go",
+      "path": "internal/lithesdk/lithe/diagnostics.go",
+      "sha256": "dc17212a6af0c7236860480b9e97e49d31ade1d741d021eea04a297f552dca9b"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/errors.go",
+      "path": "internal/lithesdk/lithe/errors.go",
+      "sha256": "306d52fd3ec4b7acf7e67f9f575dfcb736798776c4d1d5a5144b1651921c7c99"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/framing.go",
+      "path": "internal/lithesdk/lithe/framing.go",
+      "sha256": "e2bc2938af8956cbc8948fdfccf1800276e8c2495480fcd430936be75eb8e166"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/host.go",
+      "path": "internal/lithesdk/lithe/host.go",
+      "sha256": "926f8b1b7d7f031430290f789f9f8e87dcdabdd24e324b2f8294be7d0260daa2"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/protocol.go",
+      "path": "internal/lithesdk/lithe/protocol.go",
+      "sha256": "054f7c711032abc6e3907fae3f54ecb3a208e05457a2a0ea831b7a9ee1ef4463"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/stdio_dup2.go",
+      "path": "internal/lithesdk/lithe/stdio_dup2.go",
+      "sha256": "0da3cc2be03baa00733731c6783f6a486dc8603667aea1d14ee1794efab65b0f"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/stdio_linux.go",
+      "path": "internal/lithesdk/lithe/stdio_linux.go",
+      "sha256": "bfde8bb17da9dfbd6bade1b7e419c9869f42802f420e84363849a0d4add542db"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/stdio_other.go",
+      "path": "internal/lithesdk/lithe/stdio_other.go",
+      "sha256": "8a39bdf4ab941d84718c95d723ec1fc98bfbeb2ab54aa6895e262ec9ddbb1c78"
+    },
+    {
+      "upstream": "shared/plugins/sdk/go/lithe/view.go",
+      "path": "internal/lithesdk/lithe/view.go",
+      "sha256": "8a834b87a751f91cd597c7f92d9f754647a01e179ac0fe133dade23c876f7598"
+    }
+  ]
+}

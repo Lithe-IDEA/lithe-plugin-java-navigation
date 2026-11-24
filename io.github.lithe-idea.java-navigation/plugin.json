@@ -2,9 +2,10 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-navigation",
   "displayName": "Java Support Lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "pluginAPIVersion": 0,
   "requires": {
+    "backend": 0,
     "languageServers": 0,
     "languages": 0
   },
@@ -14,10 +15,15 @@
     "signatureRequirement": "none"
   },
   "permissions": [
-    "languageServer.launch"
+    "backend.launch",
+    "editor.actions",
+    "languageServer.launch",
+    "languageServer.request",
+    "workspace.metadata"
   ],
   "activationEvents": [
-    "onLanguage:java"
+    "onLanguage:java",
+    "onWorkspaceOpen"
   ],
   "languages": [
     {
@@ -49,7 +55,21 @@
       ],
       "validationArguments": [
         "--version"
+      ],
+      "requestMethods": [
+        "textDocument/implementation",
+        "javaNavigation/superDeclarations",
+        "javaNavigation/markers"
       ]
     }
-  ]
+  ],
+  "backend": {
+    "launch": {
+      "kind": "packaged",
+      "path": "bin/java-navigation"
+    },
+    "arguments": [
+      "--backend"
+    ]
+  }
 }

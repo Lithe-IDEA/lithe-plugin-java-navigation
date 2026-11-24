@@ -153,10 +153,16 @@ func (s *Server) dispatch(m *message) {
 		s.cancel(m.Params)
 	case "textDocument/definition":
 		s.query(m, s.definition)
+	case "textDocument/implementation":
+		s.query(m, s.implementations)
 	case "textDocument/references":
 		s.query(m, s.references)
 	case "textDocument/documentSymbol":
 		s.query(m, s.documentSymbol)
+	case "javaNavigation/superDeclarations":
+		s.query(m, s.superDeclarations)
+	case "javaNavigation/markers":
+		s.query(m, s.navigationMarkers)
 	default:
 		if m.isRequest() {
 			s.conn.replyError(m.ID, codeMethodNotFound, "method not supported: "+m.Method)
@@ -296,6 +302,7 @@ func (s *Server) initialize(params json.RawMessage) any {
 				"change":    2, // incremental
 			},
 			"definitionProvider":     true,
+			"implementationProvider": true,
 			"referencesProvider":     true,
 			"documentSymbolProvider": true,
 			"workspace": map[string]any{
@@ -532,6 +539,118 @@ func (s *Server) definition(params json.RawMessage) (func(context.Context) (any,
 			return nil, err
 		}
 		return loc, nil
+	}, nil
+}
+
+func (s *Server) implementations(params json.RawMessage) (func(context.Context) (any, error), error) {
+	return s.positionTargets(params, func(ctx context.Context, w *workspace.Workspace, doc workspace.Doc, text []byte, off int) ([]workspace.Target, error) {
+		return w.Implementations(ctx, doc, text, off)
+	})
+}
+
+func (s *Server) superDeclarations(params json.RawMessage) (func(context.Context) (any, error), error) {
+	return s.positionTargets(params, func(ctx context.Context, w *workspace.Workspace, doc workspace.Doc, text []byte, off int) ([]workspace.Target, error) {
+		return w.SuperDeclarations(ctx, doc, text, off)
+	})
+}
+
+func (s *Server) positionTargets(
+	params json.RawMessage,
+	query func(ctx context.Context, w *workspace.Workspace, doc workspace.Doc, text []byte, off int) ([]workspace.Target, error),
+) (func(context.Context) (any, error), error) {
+	var p textDocumentPosition
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	w, doc, text, off, err := s.prepare(p)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) (any, error) {
+		out := []Location{}
+		if w == nil || !doc.Covered() {
+			return out, nil
+		}
+		targets, err := query(ctx, w, doc, text, off)
+		if err != nil {
+			return nil, err
+		}
+		texts := map[string][]byte{}
+		for _, t := range targets {
+			loc, err := s.locationCached(w, t, texts)
+			if err != nil {
+				continue
+			}
+			out = append(out, loc)
+		}
+		return out, nil
+	}, nil
+}
+
+type markerTargetJSON struct {
+	Name     string   `json:"name"`
+	Location Location `json:"location"`
+}
+
+type markerJSON struct {
+	Line         int                `json:"line"`
+	Character    int                `json:"character"`
+	EndCharacter int                `json:"endCharacter"`
+	Direction    string             `json:"direction"`
+	Relation     string             `json:"relation"`
+	Targets      []markerTargetJSON `json:"targets"`
+}
+
+func (s *Server) navigationMarkers(params json.RawMessage) (func(context.Context) (any, error), error) {
+	var p struct {
+		TextDocument textDocumentIdentifier `json:"textDocument"`
+		Text         string                 `json:"text"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	path, text, err := s.snapshot(p.TextDocument.URI)
+	if err != nil {
+		return nil, err
+	}
+	if p.Text != "" {
+		text = []byte(p.Text)
+	}
+	w, doc := s.locate(path)
+	enc := s.encoding()
+	return func(ctx context.Context) (any, error) {
+		if w == nil || !doc.Covered() || !codenav.Supports(path) {
+			return map[string]any{"markers": []markerJSON{}}, nil
+		}
+		markers, err := w.NavigationMarkers(ctx, doc, text)
+		if err != nil {
+			return nil, err
+		}
+		texts := map[string][]byte{}
+		out := make([]markerJSON, 0, len(markers))
+		for _, m := range markers {
+			r := nameRange(text, m.Line, m.Column, enc)
+			targets := make([]markerTargetJSON, 0, len(m.Targets))
+			for _, mt := range m.Targets {
+				loc, err := s.locationCached(w, mt.Target, texts)
+				if err != nil {
+					continue
+				}
+				targets = append(targets, markerTargetJSON{Name: mt.Name, Location: loc})
+			}
+			if len(targets) == 0 {
+				continue
+			}
+			out = append(out, markerJSON{
+				Line:         r.Start.Line,
+				Character:    r.Start.Character,
+				EndCharacter: r.End.Character,
+				Direction:    m.Direction,
+				Relation:     m.Relation,
+				Targets:      targets,
+			})
+		}
+		return map[string]any{"markers": out}, nil
 	}, nil
 }
 

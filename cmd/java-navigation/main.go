@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 
+	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/backend"
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/deps"
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/jdk"
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/lsp"
@@ -36,11 +37,15 @@ func main() {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	noJDK := flag.Bool("no-jdk", false, "do not navigate into the JDK's sources")
 	noDeps := flag.Bool("no-dependencies", false, "do not navigate into dependency jars (Maven dependencies and the jars the project keeps)")
+	runBackend := flag.Bool("backend", false, "run as a Lithe plugin backend over stdio")
 	flag.Bool("stdio", true, "speak LSP over standard input and output (the only transport)")
 	flag.Parse()
 	if *printVersion {
 		fmt.Println("java-navigation", version)
 		return
+	}
+	if *runBackend {
+		os.Exit(backend.Run(version))
 	}
 	// Standard output carries the protocol; diagnostics go to standard error,
 	// which the host records in the server's log.

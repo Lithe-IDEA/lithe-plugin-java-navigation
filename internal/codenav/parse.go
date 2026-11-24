@@ -44,15 +44,19 @@ type File struct {
 // Type is a class, interface, enum, record or annotation type declaration.
 // Line and Col locate its name (0-based line, byte column).
 type Type struct {
-	Name, FQN string
-	Kind      declKind
-	File      *File
-	Line, Col int32
-	Outer     *Type
-	Supers    []string // as written, generics stripped
-	Members   []*Member
-	Nested    []*Type
-	Lombok    uint8 // lombokGetter | lombokSetter
+	Name, FQN  string
+	Kind       declKind
+	File       *File
+	Line, Col  int32
+	Outer      *Type
+	Supers     []string // as written, generics stripped
+	Extends    []string // types in extends clause, generics stripped
+	Implements []string // types in implements clause, generics stripped
+	Final      bool
+	Abstract   bool
+	Members    []*Member
+	Nested     []*Type
+	Lombok     uint8 // lombokGetter | lombokSetter
 	// Positions of @Builder and @Slf4j-style annotations (-1 if absent):
 	// Lombok-generated members have no source of their own, so navigation
 	// lands on the annotation, as JDTLS does.
@@ -82,6 +86,10 @@ type Member struct {
 	Type      string // declared/return type, generics and dims stripped; "" for ctors
 	Arity     int16
 	Varargs   bool
+	Private   bool
+	Static    bool
+	Final     bool
+	Abstract  bool
 	Params    string // parameters' simple type names, comma-separated (Lithe addition, see overloads.go)
 	Owner     *Type
 	Line, Col int32
@@ -229,10 +237,11 @@ func (p *parser) skipAnnotation(i int) (int, string) {
 }
 
 type annos struct {
-	lombok                   uint8
-	builder, logAt           pos
-	logType                  string
-	noArgs, allArgs, reqArgs pos
+	lombok                          uint8
+	builder, logAt                  pos
+	logType                         string
+	noArgs, allArgs, reqArgs        pos
+	private, static, final, abstract bool
 }
 
 // lombokLoggers is the logger type each Lombok log annotation generates;
@@ -286,6 +295,16 @@ func (p *parser) skipModifiers(i int) (int, annos) {
 			continue
 		}
 		if p.ident(i) && modifiers[p.txt(i)] || p.is(i, "-") && p.is(i-1, "non") {
+			switch p.txt(i) {
+			case "private":
+				an.private = true
+			case "static":
+				an.static = true
+			case "final":
+				an.final = true
+			case "abstract":
+				an.abstract = true
+			}
 			i++
 			continue
 		}
@@ -478,7 +497,8 @@ func (p *parser) parseBody(i int, owner *Type, enum bool) int {
 		}
 		switch {
 		case p.is(j, "("):
-			m := &Member{Name: p.in.s([]byte(p.txt(last))), Owner: owner, Line: p.toks[last].Line, Col: p.col(p.toks[last])}
+			m := &Member{Name: p.in.s([]byte(p.txt(last))), Owner: owner, Line: p.toks[last].Line, Col: p.col(p.toks[last]),
+				Private: an.private, Static: an.static, Final: an.final, Abstract: an.abstract}
 			if last == typeStart {
 				m.Kind = kCtor
 			} else {
@@ -651,7 +671,8 @@ func (p *parser) parseTypeDecl(i int, outer *Type, an annos) int {
 	nameTok := i + 1
 	t := &Type{Name: p.in.s([]byte(p.txt(nameTok))), File: p.f, Outer: outer,
 		Line: p.toks[nameTok].Line, Col: p.col(p.toks[nameTok]), Lombok: an.lombok,
-		BuilderAt: an.builder, LogAt: an.logAt, LogType: an.logType, NoArgsAt: an.noArgs, AllArgsAt: an.allArgs, ReqArgsAt: an.reqArgs}
+		BuilderAt: an.builder, LogAt: an.logAt, LogType: an.logType, NoArgsAt: an.noArgs, AllArgsAt: an.allArgs, ReqArgsAt: an.reqArgs,
+		Final: an.final || kw == "enum" || kw == "record", Abstract: an.abstract || kw == "interface"}
 	switch kw {
 	case "class":
 		t.Kind = kClass
@@ -695,7 +716,14 @@ func (p *parser) parseTypeDecl(i int, outer *Type, an annos) int {
 			for p.ident(j) && p.is(j+1, ".") && p.ident(j+2) {
 				j += 2
 			}
-			t.Supers = append(t.Supers, p.typeText(s, j+1))
+			name := p.typeText(s, j+1)
+			t.Supers = append(t.Supers, name)
+			switch mode {
+			case "extends":
+				t.Extends = append(t.Extends, name)
+			case "implements":
+				t.Implements = append(t.Implements, name)
+			}
 			j++
 		default:
 			j++

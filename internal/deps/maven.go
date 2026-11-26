@@ -131,11 +131,7 @@ type maven struct {
 // the modules' own dependencies first, then theirs. repo is the local
 // repository; a module of the working tree is never one of the jars.
 func MavenJars(ctx context.Context, poms []string, repo string, logf func(string, ...any)) ([]Jar, error) {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	m := &maven{ctx: ctx, repo: &localRepo{root: repo, versions: map[string][]string{}}, raw: map[string]*pomXML{},
-		models: map[string]*model{}, building: map[string]bool{}, tree: map[string]string{}, logf: logf}
+	m := newMaven(ctx, &localRepo{root: repo, versions: map[string][]string{}}, logf)
 	sort.Strings(poms)
 	var roots []*model
 	for _, p := range poms {
@@ -144,7 +140,20 @@ func MavenJars(ctx context.Context, poms []string, repo string, logf func(string
 			roots = append(roots, mo)
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	return m.resolve(roots)
+}
+
+func newMaven(ctx context.Context, repo *localRepo, logf func(string, ...any)) *maven {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	return &maven{ctx: ctx, repo: repo, raw: map[string]*pomXML{}, models: map[string]*model{},
+		building: map[string]bool{}, tree: map[string]string{}, logf: logf}
+}
+
+// resolve follows the POMs of the direct dependencies supplied by the build files.
+func (m *maven) resolve(roots []*model) ([]Jar, error) {
+	if err := m.ctx.Err(); err != nil {
 		return nil, err
 	}
 	type item struct {
@@ -161,7 +170,7 @@ func MavenJars(ctx context.Context, poms []string, repo string, logf func(string
 	seen := map[string]bool{}
 	var out []Jar
 	for len(queue) > 0 && len(out) < maxArtifacts {
-		if err := ctx.Err(); err != nil {
+		if err := m.ctx.Err(); err != nil {
 			return nil, err
 		}
 		it := queue[0]
@@ -395,7 +404,8 @@ func (m *maven) parentOf(path string, p *pomXML) *model {
 	if p.Parent.RelativePath != nil {
 		rel = strings.TrimSpace(*p.Parent.RelativePath)
 	}
-	if rel != "" {
+	// Gradle's hash directories never contain a source tree's relative parent.
+	if rel != "" && !m.repo.gradle {
 		cand := filepath.Join(filepath.Dir(path), filepath.FromSlash(rel))
 		if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
 			cand = filepath.Join(cand, "pom.xml")
@@ -529,10 +539,14 @@ func LocalRepository(home string) string {
 // localRepo reads a Maven repository layout.
 type localRepo struct {
 	root     string
+	gradle   bool                // Gradle files-2.1 layout: literal group ID, one hash directory per file
 	versions map[string][]string // listed version directories by "group:artifact"
 }
 
 func (r *localRepo) dir(group, artifact string) string {
+	if r.gradle {
+		return filepath.Join(r.root, group, artifact)
+	}
 	return filepath.Join(r.root, filepath.FromSlash(strings.ReplaceAll(group, ".", "/")), artifact)
 }
 
@@ -546,7 +560,21 @@ func (r *localRepo) file(group, artifact, version, classifier, ext string) (stri
 	if classifier != "" {
 		name += "-" + classifier
 	}
-	p := filepath.Join(r.dir(group, artifact), version, name+"."+ext)
+	dir := filepath.Join(r.dir(group, artifact), version)
+	name += "." + ext
+	if r.gradle {
+		entries, _ := os.ReadDir(dir)
+		for _, hash := range entries {
+			if hash.IsDir() {
+				p := filepath.Join(dir, hash.Name(), name)
+				if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+					return p, true
+				}
+			}
+		}
+		return "", false
+	}
+	p := filepath.Join(dir, name)
 	fi, err := os.Stat(p)
 	if err != nil || !fi.Mode().IsRegular() {
 		return "", false
@@ -563,6 +591,9 @@ func (r *localRepo) jar(group, artifact, version, classifier string) (string, bo
 // property or a version that was never downloaded).
 func (r *localRepo) pick(group, artifact, version string) string {
 	if version != "" && !strings.ContainsAny(version, "${[(,") {
+		if r.gradle {
+			return version // look up the declared version, including classifier-only jars
+		}
 		if _, ok := r.file(group, artifact, version, "", "pom"); ok {
 			return version
 		}

@@ -29,7 +29,7 @@ const TARGETS = [
   { platform: "windows-arm64", goos: "windows", goarch: "arm64" },
 ];
 // Files copied next to plugin.json in every archive.
-const INCLUDED = ["LICENSE", "THIRD_PARTY_NOTICES.md", "vendor/LICENSE"];
+const INCLUDED = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/lithe-sdk-LICENSE", "licenses/BurntSushi-toml-LICENSE"];
 
 const manifest = JSON.parse(readFileSync(`${PACKAGE_DIR}/plugin.json`, "utf8"));
 const problems = [];

@@ -2,13 +2,13 @@
 
 [Java Support](https://github.com/Lithe-IDEA/lithe-plugin-java) 的轻量版（插件 ID 仍是 `io.github.lithe-idea.java-navigation`，0.0.2 及以前叫 Java Navigation）。
 为 [Lithe](https://github.com/1lck/Lithe-IDEA) 提供**不依赖 JDT LS 的轻量 Java 跳转**：跳转到定义、查找引用和文档结构，
-能跳进 JDK 和 Maven 依赖库。插件自带一个用 Go 写的小型语言服务器，不需要 JDK 运行时、不运行 Maven，
+能跳进 JDK、Maven 和 Gradle 依赖库。插件自带一个用 Go 写的小型语言服务器，不需要 JDK 运行时、不运行 Maven 或 Gradle，
 打开项目后第一次跳转约 0.2–0.5 秒就能用，常驻内存 60–90 MiB（同一个项目 JDT LS 要 3 GB，导入要 1 分钟）。
 这是一个**社区插件**，按插件契约 v0 编写。
 
 > English: Java Support Lite, the lightweight edition of Java Support (plugin ID `io.github.lithe-idea.java-navigation`,
 > named Java Navigation up to 0.0.2): lightweight Java navigation for Lithe without JDT LS — go to definition, find references and the
-> document outline, into the JDK and Maven dependency jars, served by a small Go language server that keeps
+> document outline, into the JDK and Maven or Gradle dependency jars, served by a small Go language server that keeps
 > an index of declarations only. No JDK runtime, no build import, 60–90 MiB of memory.
 
 > **预发布**：按插件契约 v0（`schemaVersion: 0`、`pluginAPIVersion: 0`）编写，只能装进新版 Lithe 桌面端
@@ -22,7 +22,7 @@
 | 实现 / 父类双向跳转 | 接口/父类向下跳转到实现类与重写方法（`textDocument/implementation`），实现类/重写方法向上跳回接口与父类声明（`javaNavigation/superDeclarations`），并在行首绘制绿色 `I↓`/`I↑` 与蓝色 `O↓`/`O↑` 导航图标 |
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
-| 跳进依赖库 | Maven 项目的依赖（含传递依赖）从本地仓库读：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
+| 跳进依赖库 | Maven 和 Gradle 的依赖（含传递依赖）从本地仓库或缓存读取：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
 | 老项目的 jar | 读 Eclipse `.classpath`、Ant `build.xml` 的静态类路径，以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
 | Eclipse 容器 | `.classpath` 里的服务器运行时容器（Tomcat、Jetty、WildFly 等）和 JUnit 容器换成本机已有的 jar，`HttpServletRequest`、`@WebServlet`、`@Test` 都能跳；没有 pom 的 `WEB-INF/web.xml` Web 项目同样补上 Servlet/JSP API |
 | 生成代码 | 模块的 `target/generated-sources`（protobuf、注解处理器）和 Gradle 的 `build/generated` 也进索引，即使被 `.gitignore` 忽略 |
@@ -43,6 +43,8 @@
   只预先列出每个 jar 的目录（Nacos 265 个 jar、4.4 万个类；ruoyi-vue-pro 824 个 jar、15 万个类，约 0.3 秒），
   某个类第一次被查到时才读它的源码或生成存根；跳进去时把那一个文件写成只读副本，放在 `${stateDir}/dependency-sources`，
   不写本地仓库。
+- Gradle 项目从 `build.gradle`、`build.gradle.kts` 的 `dependencies` 块读取常用 Java 配置中的字面量坐标和 `libs.*` 引用。别名来自工作区根的 `gradle/libs.versions.toml`。
+  在 `${GRADLE_USER_HOME:-~/.gradle}/caches/modules-2/files-2.1` 查找 JAR、源码包和传递依赖的 POM。省略版本时取本地缓存的最高版本，显式指定的版本缺失时跳过。
 - 工作区里的 jar：先按每个 Eclipse `.classpath` 的 `lib` 条目和 `M2_REPO` 变量条目的顺序，再加上路径往上三层内
   有 `lib` 或 `libs` 目录的 jar（`WEB-INF/lib`、`lib/optional` 都算；测试资源里的 jar、`gradle-wrapper.jar`、
   `target`/`build` 里的不算）；工作区根目录和每个 `build.xml`、`.classpath`、`.project` 所在目录下的 `lib`、
@@ -59,7 +61,7 @@
   Servlet API 和 JSP API；`JUNIT_CONTAINER/3`、`/4`、`/5` 取本地仓库里对应大版本的最新 JUnit（4 加上 hamcrest-core）。
   项目自己已经带了 Servlet 或 JUnit 的 jar 时不再补。没有 `pom.xml`/Gradle 构建文件、但有 `WEB-INF/web.xml` 的
   项目按 Servlet 容器处理（web.xml 用 Jakarta EE 命名空间时取 `jakarta.servlet`）。不联网下载，本机都没有就跳过。
-- `pom.xml`、`.classpath` 或上面任一个 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
+- 构建脚本、Gradle 版本目录、`pom.xml`、`.classpath` 或工作区内的 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
 - JDK：按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
   （含 IntelliJ 的 `~/.jdks`、SDKMAN!）的顺序找第一个带 `src.zip` 的 JDK。只预先列出 zip 目录，某个类第一次被查到时才解析。
   跳进 JDK 时把那一个源码文件解压成只读副本，放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
@@ -114,11 +116,22 @@
 | [OpenCms](https://github.com/alkacon/opencms-core) | 2000 年起的 JSP CMS，Gradle | 94.1% | 0.20 ms / 2.0 ms | 0.13 s | 54 MiB |
 
 剩下没跳到的主要是：依赖没在项目里声明或本地仓库没有（JFinal 的 Servlet 依赖在 pom 里被注释掉了，Struts 的
-JSF 依赖没下载过，OpenCms 的 Gradle 依赖读不了）、数组的 `.length`（JDT LS 也不跳）、`java.util.Date` 这种全限定名里的包名段，以及 lambda 参数。
+JSF 依赖没下载过，这轮 OpenCms 基准早于 Gradle 缓存支持）、数组的 `.length`（JDT LS 也不跳）、`java.util.Date` 这种全限定名里的包名段，以及 lambda 参数。
+
+### Spring Boot Gradle 项目（Linux x64）
+
+取 Spring 官方 REST 示例的 `complete` 目录，仅保留 Gradle 构建与 Java 源码。Gradle 9.3.1 的 `testClasses` 已预热依赖缓存。使用 `cmd/nav-bench -seed 2` 对相同的 33 个位置交替测量三轮，每轮启动新语言服务器并使用独立状态目录。两组均未加载 JDK 源码。[示例工程固定版本](https://github.com/spring-guides/gs-rest-service/tree/e15fec6773dc1eb6028055630e3e68cbd8653240/complete)
+
+| 依赖解析 | 命中 | 首次跳转 | 跳转 p50 | 查询结束 RSS |
+| --- | --- | --- | --- | --- |
+| 修复前（`4750015`） | 18/33（54.5%） | 4 ms | 0.14–0.15 ms | 8 MiB |
+| 读取 Gradle 缓存 | 25/33（75.8%） | 53–56 ms | 0.18–0.21 ms | 12–13 MiB |
+
+新增的 7 个命中全部指向依赖声明，包括 `SpringApplication.run`、`@RestController` 和 `@GetMapping`。索引载入了 65 个 JAR 的 9,458 个类，查询结束时 RSS 增加 4–5 MiB。
 
 ## 限制
 
-- **依赖库只读 Maven 和工作区里的 jar**：Gradle 项目的依赖还读不了（Gradle 的生成代码可以）；Ant 目标执行时
+- **依赖库使用静态声明和本地缓存**。Gradle 脚本计算出的坐标、自定义版本目录、bundle 和变体选择不参与解析；Ant 目标执行时
   才能得到的类路径也会跳过。只用本地仓库里已有的 jar，
   从没构建过、依赖还没下载的项目跳不进依赖库。没有 `-sources.jar` 时打开签名存根，没有方法体和注释；
   编译时没带调试信息的接口和抽象方法，参数名是 `arg0`、`arg1`。
@@ -151,7 +164,7 @@ go run ./cmd/nav-bench -h         # 在真实项目上测命中率、延迟和�
 
 `dist/` 里每个平台一个 zip（`darwin-arm64`、`darwin-x64`、`windows-x64`、`windows-arm64`），包内只有
 `plugin.json`、`bin/java-navigation`（Windows 是 `bin/java-navigation.exe`，对应平台包的 `plugin.json` 为语言服务器与 `--backend` 后端均写这个路径）、
-`LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `vendor/LICENSE`。
+`LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `licenses/` 下的第三方许可证。
 
 语言服务器和后端都可以单独运行调试：
 

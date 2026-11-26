@@ -36,7 +36,7 @@ func main() {
 	state := flag.String("state-dir", "", "writable directory for extracted JDK sources (the host's ${stateDir})")
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	noJDK := flag.Bool("no-jdk", false, "do not navigate into the JDK's sources")
-	noDeps := flag.Bool("no-dependencies", false, "do not navigate into dependency jars (Maven dependencies and the jars the project keeps)")
+	noDeps := flag.Bool("no-dependencies", false, "do not navigate into dependency jars (Maven, Gradle and the jars the project keeps)")
 	runBackend := flag.Bool("backend", false, "run as a Lithe plugin backend over stdio")
 	flag.Bool("stdio", true, "speak LSP over standard input and output (the only transport)")
 	flag.Parse()

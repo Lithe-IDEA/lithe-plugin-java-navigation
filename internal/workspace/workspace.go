@@ -14,8 +14,8 @@
 //     text again.
 //
 // Names the folder does not declare resolve into the JDK's sources when a JDK
-// with sources is installed, and into the jars of the folder's Maven
-// dependencies that the local repository holds (package deps). Their
+// with sources is installed, and into the locally cached jars of the folder's Maven
+// and Gradle dependencies (package deps). Their
 // declarations are extracted, one file at a time, into read-only copies
 // under the state directory, which the editor opens as ordinary files; a
 // query from such a copy is answered as a library source.
@@ -71,9 +71,8 @@ type Options struct {
 	// FindJDK locates the JDK whose sources are used; nil disables them.
 	FindJDK func(context.Context) (jdk.JDK, bool)
 	// Dependencies enables navigation into the folder's dependency jars;
-	// it needs State. They are the Maven dependencies its pom.xml files
-	// declare, read from MavenRepo, and the jars the tree keeps itself
-	// (deps.TreeJars).
+	// it needs State. This includes dependencies from MavenRepo, the Gradle
+	// cache and the jars the tree keeps itself (deps.TreeJars).
 	Dependencies bool
 	// MavenRepo is the local Maven repository; "" leaves Maven dependencies
 	// out.
@@ -588,21 +587,19 @@ func (w *Workspace) runScan(run *scanRun) {
 	if err != nil {
 		err = fmt.Errorf("list source files: %w", err)
 	}
-	var poms []string
-	var tree []deps.Jar
-	var inputs map[string]stamp
+	var inputs dependencyInputs
 	useDeps := err == nil && w.opt.Dependencies && w.opt.State != ""
 	if useDeps {
-		poms, tree, inputs = w.depInputs(all)
+		inputs = w.depInputs(all)
 	}
-	lookDeps := useDeps && (oldInputs == nil || !sameStamps(oldInputs, inputs) || time.Since(depsAt) > depsRefresh)
+	lookDeps := useDeps && (oldInputs == nil || !sameStamps(oldInputs, inputs.stamps) || time.Since(depsAt) > depsRefresh)
 	var depSet *deps.Set
 	var depsErr error
 	depsDone := make(chan struct{})
 	if lookDeps {
 		go func() {
 			defer close(depsDone)
-			depSet, depsErr = w.readDeps(ctx, poms, tree)
+			depSet, depsErr = w.readDeps(ctx, inputs)
 		}()
 	} else {
 		close(depsDone)
@@ -632,7 +629,7 @@ func (w *Workspace) runScan(run *scanRun) {
 		if depsErr != nil {
 			w.opt.Logf("dependency jars unavailable: %v", depsErr)
 		} else {
-			w.deps, w.inputs, w.depsAt = depSet, inputs, started
+			w.deps, w.inputs, w.depsAt = depSet, inputs.stamps, started
 			changed = true
 		}
 	}
@@ -692,23 +689,33 @@ func (w *Workspace) library() *codenav.Library {
 	})
 }
 
-// depInputs returns the absolute paths of the folder's pom.xml files, the
-// jars its tree keeps, and the stamps of the jars and their build inputs.
-func (w *Workspace) depInputs(all []string) (poms []string, tree []deps.Jar, inputs map[string]stamp) {
-	inputs = map[string]stamp{}
+type dependencyInputs struct {
+	poms, gradleScripts []string
+	catalog             string
+	tree                []deps.Jar
+	stamps              map[string]stamp
+}
+
+// depInputs tracks the build inputs whose changes invalidate the classpath.
+func (w *Workspace) depInputs(all []string) dependencyInputs {
+	inputs := dependencyInputs{stamps: map[string]stamp{}}
 	note := func(p string) bool {
 		fi, err := os.Stat(p)
 		if err != nil || !fi.Mode().IsRegular() {
 			return false
 		}
-		inputs[p] = stamp{size: fi.Size(), mod: fi.ModTime()}
+		inputs.stamps[p] = stamp{size: fi.Size(), mod: fi.ModTime()}
 		return true
 	}
 	for _, p := range all {
 		switch path.Base(p) {
 		case "pom.xml":
 			if w.opt.MavenRepo != "" && note(w.abs(p)) {
-				poms = append(poms, w.abs(p))
+				inputs.poms = append(inputs.poms, w.abs(p))
+			}
+		case "build.gradle", "build.gradle.kts":
+			if note(w.abs(p)) {
+				inputs.gradleScripts = append(inputs.gradleScripts, w.abs(p))
 			}
 		case ".classpath":
 			note(w.abs(p))
@@ -718,14 +725,18 @@ func (w *Workspace) depInputs(all []string) (poms []string, tree []deps.Jar, inp
 			note(w.abs(path.Join(path.Dir(p), "build.properties")))
 		}
 	}
-	tree = deps.TreeJars(w.opt.Root, all, w.opt.MavenRepo)
-	for _, j := range tree {
+	if len(inputs.gradleScripts) > 0 {
+		inputs.catalog = w.abs("gradle/libs.versions.toml")
+		note(inputs.catalog)
+	}
+	inputs.tree = deps.TreeJars(w.opt.Root, all, w.opt.MavenRepo)
+	for _, j := range inputs.tree {
 		note(j.Path)
 		if j.Sources != "" {
 			note(j.Sources)
 		}
 	}
-	return poms, tree, inputs
+	return inputs
 }
 
 func sameStamps(a, b map[string]stamp) bool {
@@ -740,21 +751,28 @@ func sameStamps(a, b map[string]stamp) bool {
 	return true
 }
 
-// readDeps lists the jars of the Maven dependencies the poms declare, then
-// the jars the tree keeps.
-func (w *Workspace) readDeps(ctx context.Context, poms []string, tree []deps.Jar) (*deps.Set, error) {
+// readDeps resolves declared dependencies before adding the jars in the tree.
+func (w *Workspace) readDeps(ctx context.Context, inputs dependencyInputs) (*deps.Set, error) {
 	var jars []deps.Jar
-	if len(poms) > 0 {
+	if len(inputs.poms) > 0 {
 		var err error
-		if jars, err = deps.MavenJars(ctx, poms, w.opt.MavenRepo, w.opt.Logf); err != nil {
+		if jars, err = deps.MavenJars(ctx, inputs.poms, w.opt.MavenRepo, w.opt.Logf); err != nil {
 			return nil, err
 		}
 	}
 	maven := len(jars)
-	jars = append(jars, tree...)
+	if len(inputs.gradleScripts) > 0 {
+		gradle, err := deps.GradleJars(ctx, inputs.gradleScripts, inputs.catalog, w.opt.Logf)
+		if err != nil {
+			return nil, err
+		}
+		jars = append(jars, gradle...)
+	}
+	gradle := len(jars) - maven
+	jars = append(jars, inputs.tree...)
 	set := deps.Open(jars, w.opt.Logf)
-	w.opt.Logf("dependency jars: %d of %d resolved (%d Maven, %d in the working tree), %d classes",
-		set.Len(), len(jars), maven, len(tree), set.Classes())
+	w.opt.Logf("dependency jars: %d of %d resolved (%d Maven, %d Gradle, %d in the working tree), %d classes",
+		set.Len(), len(jars), maven, gradle, len(inputs.tree), set.Classes())
 	return set, nil
 }
 

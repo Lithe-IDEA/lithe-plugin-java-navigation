@@ -37,7 +37,7 @@ var libProbes = []string{"lib", "libs", "WEB-INF/lib", "WebContent/WEB-INF/lib",
 var projectMarkers = map[string]bool{"build.xml": true, ".classpath": true, ".project": true}
 
 // TreeJars lists the jars root keeps in its working tree: the library
-// entries of its Eclipse .classpath files, in their order, then the jars in
+// entries of its Eclipse .classpath files, then Ant paths, then the jars in
 // lib directories (see libDirs and libProbes). files are root's files as
 // slash-separated relative paths; repo resolves Eclipse's M2_REPO variable
 // and may be "". Jars that do not exist are left out. A jar's sources are the
@@ -47,16 +47,21 @@ var projectMarkers = map[string]bool{"build.xml": true, ".classpath": true, ".pr
 func TreeJars(root string, files []string, repo string) []Jar {
 	t := treeJars{seen: map[string]bool{}}
 	var markerDirs []string
-	listed := map[string]bool{}
+	var builds []string
 	for _, f := range files {
-		listed[f] = true
 		dir, base := path.Split(f)
 		if base == ".classpath" {
 			t.classpath(root, f, repo)
 		}
+		if base == "build.xml" {
+			builds = append(builds, f)
+		}
 		if projectMarkers[base] {
 			markerDirs = append(markerDirs, strings.TrimSuffix(dir, "/"))
 		}
+	}
+	for _, build := range builds {
+		t.antPath(root, build)
 	}
 	for _, f := range files {
 		if inLibDir(f) {

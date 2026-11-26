@@ -275,3 +275,31 @@ func TestDefinitionIntoJarsTheTreeKeeps(t *testing.T) {
 		t.Errorf("WEB-INF changed")
 	}
 }
+
+func TestAntPropertyEditChangesDefinitionPrecedence(t *testing.T) {
+	root := t.TempDir()
+	src := "import com.example.helper.Helper;\nclass A { String s = Helper.shout(\"x\"); }"
+	write(t, root, map[string]string{
+		"A.java": src,
+		"build.xml": `<project><property file="build.properties"/><path id="compile">
+			<pathelement location="${first}.jar"/><pathelement location="${second}.jar"/>
+		</path></project>`,
+		"build.properties": "first=primary\nsecond=fallback\n",
+	})
+	for _, name := range []string{"primary.jar", "fallback.jar"} {
+		copyFile(t, filepath.Join("..", "deps", "testdata", "fixture", "helper-2.0.jar"), filepath.Join(root, name))
+	}
+	w := New(Options{Root: root, State: t.TempDir(), Dependencies: true, ListFiles: walkFiles, Freshness: -1})
+	doc := w.DocOf(filepath.Join(root, "A.java"))
+	check := func(jar string) {
+		t.Helper()
+		tgt, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, "shout", 0, 1))
+		if err != nil || !ok || !strings.Contains(filepath.ToSlash(tgt.File), "/dependency-sources/"+jar+"-") {
+			t.Fatalf("expected Helper.shout from %s, got %+v, %v", jar, tgt, err)
+		}
+	}
+	check("primary")
+	// Different size so the edit is visible even on a coarse filesystem clock.
+	write(t, root, map[string]string{"build.properties": "# swap\nfirst=fallback\nsecond=primary\n"})
+	check("fallback")
+}

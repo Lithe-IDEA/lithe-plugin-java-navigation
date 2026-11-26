@@ -23,7 +23,7 @@
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
 | 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
 | 跳进依赖库 | Maven 项目的依赖（含传递依赖）从本地仓库读：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
-| 老项目的 jar | 没有 Maven 的 Ant、Eclipse、MyEclipse 项目，读 `.classpath` 里列出的 jar（含 `M2_REPO` 变量和 `sourcepath`），以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
+| 老项目的 jar | 读 Eclipse `.classpath`、Ant `build.xml` 的静态类路径，以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
 | Eclipse 容器 | `.classpath` 里的服务器运行时容器（Tomcat、Jetty、WildFly 等）和 JUnit 容器换成本机已有的 jar，`HttpServletRequest`、`@WebServlet`、`@Test` 都能跳；没有 pom 的 `WEB-INF/web.xml` Web 项目同样补上 Servlet/JSP API |
 | 生成代码 | 模块的 `target/generated-sources`（protobuf、注解处理器）和 Gradle 的 `build/generated` 也进索引，即使被 `.gitignore` 忽略 |
 | 查找引用 | 只列出能跳回这个声明的出现，所以列表和在任一行上跳转的结果一致；`package`/`import` 不算引用 |
@@ -49,6 +49,9 @@
   `WEB-INF/lib`、`WebContent/WEB-INF/lib`、`WebRoot/WEB-INF/lib` 等即使被 `.gitignore` 忽略也会读。源码取
   `.classpath` 的 `sourcepath`，或旁边的 `-sources.jar`、`-src.zip`；源码包不是按包名放的（比如整个源码树打的 zip）就不用，改用存根。
   这些 jar 只读，不会被修改。
+- Ant 的 `<path>` 和 `<classpath>` 还可以通过 `<pathelement location="ext/x.jar"/>` 单独列出 jar，或通过
+  `<fileset dir="${thirdparty.dir}" includes="**/*.jar"/>` 选择工作区内的 jar。支持 include/exclude 模式、
+  项目顶层的 `<property name="…" value="…"/>` 和 `location`，以及显式加载的同目录 `build.properties` 中的简单键值对。
 - Eclipse 容器（`kind="con"`）：服务器运行时容器按运行时名字判断包名（Tomcat 10+、Jetty 11+、WildFly 27+、
   GlassFish/Payara 6+、TomEE 9+ 用 `jakarta.servlet`，更早的用 `javax.servlet`），先找本机装的服务器
   （`CATALINA_HOME`/`CATALINA_BASE`、Homebrew、`/opt`、`/usr/share`、Windows 的 `Program Files`、`~/apache-tomcat-*`）
@@ -115,8 +118,8 @@ JSF 依赖没下载过，OpenCms 的 Gradle 依赖读不了）、数组的 `.len
 
 ## 限制
 
-- **依赖库只读 Maven 和工作区里的 jar**：Gradle 项目的依赖还读不了（Gradle 的生成代码可以）；Ant 的
-  `build.xml` 里写在 `lib` 之外目录的 classpath 也读不了。只用本地仓库里已有的 jar，
+- **依赖库只读 Maven 和工作区里的 jar**：Gradle 项目的依赖还读不了（Gradle 的生成代码可以）；Ant 目标执行时
+  才能得到的类路径也会跳过。只用本地仓库里已有的 jar，
   从没构建过、依赖还没下载的项目跳不进依赖库。没有 `-sources.jar` 时打开签名存根，没有方法体和注释；
   编译时没带调试信息的接口和抽象方法，参数名是 `arg0`、`arg1`。
 - **没有泛型推断**：重载先按参数个数选，个数相同时按实参里写得出来的类型挑（字面量、强转、`new` 表达式、

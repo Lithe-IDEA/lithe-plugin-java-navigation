@@ -343,7 +343,6 @@ func (w *Workspace) NavigationMarkers(ctx context.Context, d Doc, text []byte) (
 	return out, nil
 }
 
-
 // References lists the places that refer to the declaration named at byte
 // offset off of text, the editor's content of d, in path, line and column
 // order; with decl set the declaration itself comes first. Only occurrences
@@ -694,9 +693,7 @@ func (w *Workspace) library() *codenav.Library {
 }
 
 // depInputs returns the absolute paths of the folder's pom.xml files, the
-// jars its tree keeps, and the stamps of both and of its Eclipse .classpath
-// files: a change to any of them rereads the dependencies. all is the
-// folder's files.
+// jars its tree keeps, and the stamps of the jars and their build inputs.
 func (w *Workspace) depInputs(all []string) (poms []string, tree []deps.Jar, inputs map[string]stamp) {
 	inputs = map[string]stamp{}
 	note := func(p string) bool {
@@ -715,6 +712,10 @@ func (w *Workspace) depInputs(all []string) (poms []string, tree []deps.Jar, inp
 			}
 		case ".classpath":
 			note(w.abs(p))
+		case "build.xml":
+			note(w.abs(p))
+			// A property edit can reorder the same jars, even if Git ignores it.
+			note(w.abs(path.Join(path.Dir(p), "build.properties")))
 		}
 	}
 	tree = deps.TreeJars(w.opt.Root, all, w.opt.MavenRepo)

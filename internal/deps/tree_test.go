@@ -119,3 +119,36 @@ func TestSourcesNotRootedAtThePackagesAreIgnored(t *testing.T) {
 		t.Errorf("Point read from the sources %v:\n%s", err, b)
 	}
 }
+
+// Neither the fileset's directory nor its jars need to be listed by Git.
+func TestAntPathsOutsideLib(t *testing.T) {
+	root := t.TempDir()
+	for _, jar := range []string{"ext/one.jar", "vendor/a.jar", "vendor/a-sources.jar",
+		"vendor/deep/b.jar", "vendor/deep/c-skip.jar", "vendor/unrelated.jar", "other/ignored.jar"} {
+		treeJar(t, root, jar)
+	}
+	writeFile(t, filepath.Join(root, "module", "build.properties"), "thirdparty.dir=${prefix}\n")
+	writeFile(t, filepath.Join(root, "module", "build.xml"), `<project basedir="..">
+		<property name="prefix" value="vendor"/>
+		<property name="prefix" value="other"/>
+		<property file="module/build.properties"/>
+		<property name="first" location="ext/one.jar"/>
+		<path id="compile">
+			<pathelement location="${first}"/>
+			<pathelement location="ext/missing.jar"/>
+			<pathelement location="${unresolved}/ignored.jar"/>
+		</path>
+		<target name="compile"><javac><classpath>
+			<fileset dir="${thirdparty.dir}" excludes="**/*-skip.jar">
+				<include name="**/?.jar"/>
+			</fileset>
+			<pathelement location="ext/one.jar"/>
+			<fileset dir="other" includes="${unknown}"/>
+		</classpath></javac></target>
+		<copy><fileset dir="other"/></copy>
+	</project>`)
+	got := relJars(t, root, TreeJars(root, []string{"module/build.xml"}, ""))
+	if want := "ext/one.jar vendor/a.jar+vendor/a-sources.jar vendor/deep/b.jar"; got != want {
+		t.Errorf("Ant classpath = %q, want %q", got, want)
+	}
+}

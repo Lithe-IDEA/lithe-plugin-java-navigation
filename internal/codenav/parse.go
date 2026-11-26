@@ -237,10 +237,10 @@ func (p *parser) skipAnnotation(i int) (int, string) {
 }
 
 type annos struct {
-	lombok                          uint8
-	builder, logAt                  pos
-	logType                         string
-	noArgs, allArgs, reqArgs        pos
+	lombok                           uint8
+	builder, logAt                   pos
+	logType                          string
+	noArgs, allArgs, reqArgs         pos
 	private, static, final, abstract bool
 }
 

@@ -129,6 +129,40 @@ class Caller {
 	}
 }
 
+func TestArraySignatureImplementations(t *testing.T) {
+	const base = `package demo;
+
+interface Buffer<T> {
+    void write(String text);
+    void write(String... texts);
+    void put(T[] values);
+}
+`
+	const sub = `package demo;
+
+class TextBuffer implements Buffer<String> {
+    public void write(String text) {}
+    public void write(String[] texts) {}
+    public void put(String[] values) {}
+}
+`
+	const basePath, subPath = "demo/Buffer.java", "demo/TextBuffer.java"
+	ix := buildNavIndex(map[string]string{basePath: base, subPath: sub})
+	for _, tt := range []struct{ baseMethod, subMethod string }{
+		{"write(String text)", "write(String text)"},
+		{"write(String... texts)", "write(String[] texts)"},
+		{"put(T[] values)", "put(String[] values)"},
+	} {
+		t.Run(tt.baseMethod, func(t *testing.T) {
+			got := ix.Implementations(basePath, []byte(base), indexOf(base, tt.baseMethod))
+			want := declAtSrc(t, subPath, sub, tt.subMethod)
+			if len(got) != 1 || got[0].Path != want.Path || got[0].Line != want.Line || got[0].Column != want.Column {
+				t.Fatalf("implementations = %+v, want only %+v", got, want)
+			}
+		})
+	}
+}
+
 func TestCyclicInheritanceGuardDoesNotLoop(t *testing.T) {
 	aSrc := "package cyc; class A extends B { void m() {} }\n"
 	bSrc := "package cyc; class B extends A { void m() {} }\n"

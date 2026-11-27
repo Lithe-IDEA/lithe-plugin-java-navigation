@@ -83,7 +83,7 @@ const (
 type Member struct {
 	Name      string
 	Kind      declKind
-	Type      string // declared/return type, generics and dims stripped; "" for ctors
+	Type      string // declared/return type with array dimensions, generics stripped; "" for ctors
 	Arity     int16
 	Varargs   bool
 	Private   bool
@@ -314,9 +314,10 @@ func (p *parser) skipModifiers(i int) (int, annos) {
 }
 
 // typeText renders the type in toks[a:b] as a dotted name without generics,
-// annotations or array dimensions.
+// annotations. Array dimensions and varargs use the same [] suffix.
 func (p *parser) typeText(a, b int) string {
 	var sb []byte
+	dims := 0
 	for i := a; i < b; i++ {
 		if p.is(i, "@") {
 			i, _ = p.skipAnnotation(i)
@@ -338,9 +339,38 @@ func (p *parser) typeText(a, b int) string {
 			sb = append(sb, s...)
 		} else if p.is(i, ".") {
 			sb = append(sb, '.')
+		} else if p.is(i, "[") && i+1 < b && p.is(i+1, "]") || p.is(i, "...") {
+			dims++
 		}
 	}
+	for range dims {
+		sb = append(sb, '[', ']')
+	}
 	return p.in.s(sb)
+}
+
+// arrayDimsEnd skips the dimensions that can follow a declarator name or a
+// method's closing parenthesis (int a[], int f()[]).
+func (p *parser) arrayDimsEnd(start int) (end, dims int) {
+	end = start
+	for k := start; ; {
+		if p.is(k, "@") {
+			k, _ = p.skipAnnotation(k)
+			continue
+		}
+		if !p.is(k, "[") || !p.is(k+1, "]") {
+			return end, dims
+		}
+		k += 2
+		end, dims = k, dims+1
+	}
+}
+
+func (p *parser) declaratorType(typ string, suffix int) string {
+	if _, dims := p.arrayDimsEnd(suffix); dims > 0 {
+		return p.in.s([]byte(typ + strings.Repeat("[]", dims)))
+	}
+	return typ
 }
 
 // ParseFile reads the declarations of one Java source file for the index.
@@ -503,9 +533,11 @@ func (p *parser) parseBody(i int, owner *Type, enum bool) int {
 				m.Kind = kCtor
 			} else {
 				m.Kind = kMethod
-				m.Type = p.typeText(typeStart, last)
 			}
 			pe := p.skipBalanced(j)
+			if m.Kind == kMethod {
+				m.Type = p.declaratorType(p.typeText(typeStart, last), pe)
+			}
 			m.Arity, m.Varargs = p.arity(j, pe)
 			m.Params = p.paramTypes(j, pe)
 			owner.Members = append(owner.Members, m)
@@ -542,16 +574,14 @@ func (p *parser) parseBody(i int, owner *Type, enum bool) int {
 			k := j
 			name := last
 			for {
-				p.addField(owner, name, ft, lb)
+				p.addField(owner, name, p.declaratorType(ft, name+1), lb)
 				if p.is(k, "=") {
 					k = p.skipExpr(k + 1)
 				}
 				if p.is(k, ",") && p.ident(k+1) {
 					name = k + 1
 					k += 2
-					for p.is(k, "[") {
-						k = p.skipBalanced(k)
-					}
+					k, _ = p.arrayDimsEnd(k)
 					continue
 				}
 				break

@@ -25,7 +25,7 @@ func (q *qctx) callAt(open int) call {
 }
 
 // paramTypes returns the simple type names of the parameters between the
-// parentheses at open and end (exclusive), generics and dims stripped,
+// parentheses at open and end (exclusive), with array dimensions,
 // joined by commas and interned: members with the same signature share one
 // string, which keeps the index small.
 func (p *parser) paramTypes(open, end int) string {
@@ -33,10 +33,14 @@ func (p *parser) paramTypes(open, end int) string {
 		return ""
 	}
 	var out []byte
-	s, depth, angle := open+1, 0, 0
+	s, name, depth, angle := open+1, open+1, 0, 0
 	for k := open + 1; k < end; k++ {
 		switch {
 		case k == end-1:
+		case p.is(k, "@"):
+			k, _ = p.skipAnnotation(k)
+			k--
+			continue
 		case p.is(k, "(") || p.is(k, "[") || p.is(k, "{"):
 			depth++
 			continue
@@ -50,18 +54,17 @@ func (p *parser) paramTypes(open, end int) string {
 			angle--
 			continue
 		case p.is(k, ",") && depth == 0 && angle == 0:
+		case p.ident(k) && depth == 0 && angle == 0:
+			name = k
+			continue
 		default:
 			continue
-		}
-		name := k - 1
-		for name > s && !p.ident(name) { // String args[]
-			name--
 		}
 		if len(out) > 0 {
 			out = append(out, ',')
 		}
-		out = append(out, simpleName(p.typeText(s, name))...)
-		s = k + 1
+		out = append(out, simpleName(p.declaratorType(p.typeText(s, name), name+1))...)
+		s, name = k+1, k+1
 	}
 	return p.in.s(out)
 }
@@ -70,14 +73,24 @@ func simpleName(t string) string {
 	return t[strings.LastIndexByte(t, '.')+1:]
 }
 
-// argType is what an argument is known to be. name is "" when unknown; t is
-// set when the type was resolved; prim names a primitive; null is the
-// literal null.
+// argType is what an expression is known to be. name is the simple type
+// (including array dimensions), or "" when unknown. t is the declaration
+// of the base type when it could be resolved.
 type argType struct {
 	name string
 	t    *Type
-	prim string
 	null bool
+}
+
+func resolvedType(t *Type) argType {
+	if t == nil {
+		return argType{}
+	}
+	return argType{name: t.Name, t: t}
+}
+
+func (q *qctx) declaredType(text string, f *File, ctx *Type) argType {
+	return argType{name: simpleName(text), t: q.resolveText(text, f, ctx)}
 }
 
 func (q *qctx) argTypes(open int) []argType {
@@ -125,13 +138,13 @@ func (q *qctx) argTypeOf(s, e int, ctx *Type) argType {
 		case tok.Kind == tString:
 			return argType{name: "String"}
 		case tok.Kind == tChar:
-			return argType{prim: "char"}
+			return argType{name: "char"}
 		case tok.Kind == tNumber:
-			return argType{prim: numberType(p.txt(s))}
+			return argType{name: numberType(p.txt(s))}
 		}
 		switch p.txt(s) {
 		case "true", "false":
-			return argType{prim: "boolean"}
+			return argType{name: "boolean"}
 		case "null":
 			return argType{null: true}
 		}
@@ -161,49 +174,40 @@ func (q *qctx) argTypeOf(s, e int, ctx *Type) argType {
 	// A cast: (Foo) x, (int) y.
 	if p.is(s, "(") {
 		if ce := p.skipBalanced(s); ce < e && q.typeStartBack(ce-2) == s+1 && (p.ident(ce) || p.is(ce, "(") || p.toks[ce].Kind != tPunct) {
-			name := simpleName(p.typeText(s+1, ce-1))
-			if primitives[name] {
-				return argType{prim: name}
-			}
-			return argType{name: name, t: q.resolveText(p.typeText(s+1, ce-1), q.file, ctx)}
+			return q.declaredType(p.typeText(s+1, ce-1), q.file, ctx)
 		}
 	}
-	if t := q.typeOfExpr(e-1, ctx); t != nil {
-		return argType{name: t.Name, t: t}
-	}
-	// Names whose declared type is written but not in the index (JDK or
-	// library types without sources).
 	if p.is(s, "new") && p.ident(s+1) {
 		k := s + 1
-		for p.is(k+1, ".") && p.ident(k+2) {
-			k += 2
-		}
-		if name := p.txt(k); !primitives[name] && (p.is(k+1, "(") || p.is(k+1, "<")) {
-			return argType{name: name}
-		}
-		return argType{}
-	}
-	if e-s == 1 && p.ident(s) {
-		name := p.txt(s)
-		if l, ok := q.findLocal(name, s); ok && l.typeS >= 0 {
-			if text := p.typeText(l.typeS, l.typ); text != "var" {
-				if tn := simpleName(text); primitives[tn] {
-					return argType{prim: tn}
-				} else {
-					return argType{name: tn}
-				}
+		for {
+			k++
+			if p.is(k, "<") {
+				k = p.skipBalanced(k)
 			}
-			return argType{}
+			if !p.is(k, ".") || !p.ident(k+1) {
+				break
+			}
+			k++
 		}
-		if m := q.fieldInScope(name, ctx); m != nil && m.Type != "" {
-			if tn := simpleName(m.Type); primitives[tn] {
-				return argType{prim: tn}
-			} else {
-				return argType{name: tn}
+		typeEnd := k
+		dims := 0
+		for k < e && p.is(k, "[") {
+			k = p.skipBalanced(k)
+			dims++
+		}
+		if dims > 0 && (k == e || p.is(k, "{") && p.skipBalanced(k) == e) {
+			return q.declaredType(p.typeText(s+1, typeEnd)+strings.Repeat("[]", dims), q.file, ctx)
+		}
+		// Anonymous class bodies have the declared type for the purposes of
+		// overload selection.
+		if p.is(k, "(") {
+			end := p.skipBalanced(k)
+			if end == e || p.is(end, "{") && p.skipBalanced(end) == e {
+				return q.declaredType(p.typeText(s+1, typeEnd), q.file, ctx)
 			}
 		}
 	}
-	return argType{}
+	return q.exprType(e-1, ctx)
 }
 
 func numberType(lit string) string {
@@ -268,23 +272,44 @@ func (q *qctx) fit(a argType, param string) int {
 			return -2
 		}
 		return 0
-	case a.prim != "":
+	case a.name == "" || a.t == nil && typeVar(a.name):
+		return 0
+	case a.name == param:
+		return 3
+	}
+	if elem, array := strings.CutSuffix(a.name, "[]"); array {
+		if paramElem, arrayParam := strings.CutSuffix(param, "[]"); arrayParam {
+			// Primitive arrays are invariant. Reference array components
+			// can widen, without boxing or unboxing.
+			if primitives[elem] || primitives[paramElem] {
+				return -2
+			}
+			a.name = elem
+			if fit := q.fit(a, paramElem); fit <= 0 {
+				return fit
+			}
+			return 2
+		}
+		switch param {
+		case "Object", "Cloneable", "Serializable":
+			return 1
+		}
+		return -2
+	}
+	if strings.HasSuffix(param, "[]") {
+		return -2
+	}
+	if primitives[a.name] {
 		switch {
-		case param == a.prim:
-			return 3
-		case hasWord(widens[a.prim], param), param == boxes[a.prim]:
+		case hasWord(widens[a.name], param), param == boxes[a.name]:
 			return 2
 		case primitives[param]:
 			return -2
 		case param == "Object" || param == "Serializable" || param == "Comparable" ||
-			param == "Number" && a.prim != "boolean" && a.prim != "char":
+			param == "Number" && a.name != "boolean" && a.name != "char":
 			return 1
 		}
 		return -2
-	case a.name == "":
-		return 0
-	case a.name == param:
-		return 3
 	}
 	if primitives[param] {
 		for prim, box := range boxes {
@@ -331,18 +356,27 @@ func (q *qctx) bestOverload(ms []*Member, c call) *Member {
 	args := q.argTypes(c.open)
 	rank := func(m *Member) (group, score int) {
 		ok := true
+		expanded := m.Varargs
 		params := strings.Split(m.Params, ",")
 		for k, a := range args {
 			if m.Params == "" {
 				break
 			}
-			pk := min(k, len(params)-1) // varargs elements
-			f := q.fit(a, params[pk])
+			pk := min(k, len(params)-1)
+			param := params[pk]
+			f := q.fit(a, param)
+			if m.Varargs && pk == len(params)-1 {
+				if k == pk && len(args) == len(params) && (a.name != "" || a.null) && f >= 0 {
+					expanded = false
+				} else {
+					f = q.fit(a, strings.TrimSuffix(param, "[]"))
+				}
+			}
 			ok = ok && f >= 0
 			score += f
 		}
 		switch {
-		case ok && !m.Varargs:
+		case ok && !expanded:
 			return 2, score
 		case ok:
 			return 1, score

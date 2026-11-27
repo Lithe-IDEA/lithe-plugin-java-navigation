@@ -125,6 +125,87 @@ func TestOverloadsWithTheSameArity(t *testing.T) {
 	}
 }
 
+func TestArrayOverloads(t *testing.T) {
+	const path = "src/p/Use.java"
+	const src = `package p;
+import java.nio.charset.Charset;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+class Buffer {
+    void write(int value) {}
+    void write(byte[] bytes) {}
+    void write(byte rows[][]) {}
+    void collect(Object value) {}
+    void collect(byte... values) {}
+    void select(Object value) {}
+    void select(CharSequence[] values) {}
+    void read(byte[] values, String tag) {}
+    void read(java.io.InputStream stream, Object tag) {}
+}
+
+class Key {
+    byte[] getBytes(Charset charset) { return new byte[0]; }
+    byte getLegacy()[] { return new byte[0]; }
+    byte bytes[] = new byte[0];
+}
+
+class Result<T> {
+    T getData() { return null; }
+}
+
+class Use {
+    void run(Buffer buffer, Key key, Result<byte[]> result, byte... rest) {
+        byte rows[][] = new byte[1][1];
+        buffer.write(key.getBytes(UTF_8));
+        buffer.write(42);
+        buffer.write(rows);
+        buffer.write(rows[0]);
+        buffer.write(rows[0][0]);
+        buffer.write(new byte[]{1});
+        buffer.write((byte[]) null);
+        buffer.write((key.getLegacy()));
+        buffer.write(key.bytes);
+        buffer.write(rest);
+        buffer.write(rest[0]);
+        buffer.collect(new byte[1]);
+        buffer.collect((byte) 1);
+        buffer.collect((byte) 1, (byte) 2);
+        buffer.select(new String[1]);
+        buffer.read(result.getData(), "data");
+    }
+}
+`
+	ix := NewIndex()
+	ix.Put(ParseFile(path, []byte(src)))
+	for _, test := range []struct{ call, decl string }{
+		{"write(key.getBytes(UTF_8))", "write(byte[] bytes)"},
+		{"write(42)", "write(int value)"},
+		{"write(rows)", "write(byte rows[][])"},
+		{"write(rows[0])", "write(byte[] bytes)"},
+		{"write(rows[0][0])", "write(int value)"},
+		{"write(new byte[]{1})", "write(byte[] bytes)"},
+		{"write((byte[]) null)", "write(byte[] bytes)"},
+		{"write((key.getLegacy()))", "write(byte[] bytes)"},
+		{"write(key.bytes)", "write(byte[] bytes)"},
+		{"write(rest)", "write(byte[] bytes)"},
+		{"write(rest[0])", "write(int value)"},
+		{"collect(new byte[1])", "collect(byte... values)"},
+		{"collect((byte) 1)", "collect(Object value)"},
+		{"collect((byte) 1, (byte) 2)", "collect(byte... values)"},
+		{"select(new String[1])", "select(CharSequence[] values)"},
+		{`read(result.getData(), "data")`, "read(byte[] values, String tag)"},
+	} {
+		t.Run(test.call, func(t *testing.T) {
+			off := offsetOf(t, src, test.call, 0, 0)
+			got, ok := ix.Resolve(path, []byte(src), off)
+			want := declAtSrc(t, path, src, test.decl)
+			if !ok || got.Path != want.Path || got.Line != want.Line || got.Column != want.Column {
+				t.Fatalf("got %v (resolved %v), want %v", got, ok, want)
+			}
+		})
+	}
+}
+
 var jdtlsCaseProject = map[string]string{
 	"src/q/Manager.java": `package q;
 

@@ -205,7 +205,12 @@ func (s *Sources) Extract(state, name string) (string, error) {
 	if !s.Has(name) || !validEntry(name) {
 		return "", fmt.Errorf("%s: %w", name, fs.ErrNotExist)
 	}
-	dst := filepath.Join(s.CacheDir(state), filepath.FromSlash(name))
+	ext := path.Ext(name)
+	tabName := strings.TrimSuffix(path.Base(name), ext) + s.tabLabel() + ext
+	if len(tabName) > 255 {
+		tabName = path.Base(name)
+	}
+	dst := filepath.Join(s.CacheDir(state), filepath.FromSlash(path.Dir(name)), tabName)
 	if fi, err := os.Stat(dst); err == nil && fi.Mode().IsRegular() && (s.stubs || fi.Size() == s.entries[name].size) {
 		return dst, nil
 	}
@@ -250,7 +255,21 @@ func (s *Sources) EntryOf(state, file string) (string, bool) {
 		return "", false
 	}
 	name := filepath.ToSlash(rel)
-	return name, s.Has(name)
+	ext := path.Ext(name)
+	if stem, ok := strings.CutSuffix(strings.TrimSuffix(name, ext), s.tabLabel()); ok && s.Has(stem+ext) {
+		return stem + ext, true
+	}
+	return name, s.Has(name) // also recognize copies opened before tabs were labeled
+}
+
+// Put provenance in the tab title, even when opening a method hundreds of
+// lines from the top. Keep the archive text and LSP positions byte-for-byte.
+func (s *Sources) tabLabel() string {
+	version := sanitize(s.version)
+	if version == "" {
+		version = "unknown"
+	}
+	return " [JDK " + version + " - " + filepath.Base(s.archive) + "]"
 }
 
 // validEntry refuses entry names that would escape the cache directory.

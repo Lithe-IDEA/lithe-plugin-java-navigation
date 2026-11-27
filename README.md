@@ -62,12 +62,13 @@
   项目自己已经带了 Servlet 或 JUnit 的 jar 时不再补。没有 `pom.xml`/Gradle 构建文件、但有 `WEB-INF/web.xml` 的
   项目按 Servlet 容器处理（web.xml 用 Jakarta EE 命名空间时取 `jakarta.servlet`）。不联网下载，本机都没有就跳过。
 - 构建脚本、Gradle 版本目录、`pom.xml`、`.classpath` 或工作区内的 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
-- JDK：按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
+- JDK：启动时采用 Lithe 为当前工作区解析的 `java` 工具。Maven 根 POM 或其本地父 POM 若显式启用 fork 且指定了绝对路径的 `javac`，使用该编译器所在的 JDK。插件不运行编译器，也不从 `source`、`target`、`release` 推断安装目录。Maven profile、按模块或执行阶段切换的编译器、构建工具内部另行选择的 toolchain 不在此解析范围。
+  选中的安装缺少可导航归档时，项目内导航仍然可用。宿主没有提供 Java 安装（例如没有启用定义 `java` 工具的插件），且 Maven 没有指定编译器时，按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
   （含 IntelliJ 的 `~/.jdks`、SDKMAN!）查找可用于导航的 JDK。每套 JDK 优先使用自己的 `src.zip`。
   JDK 8 缺少源码时，用同一套运行时的 `rt.jar` 按需生成类、字段和方法声明，方法体显示为 `/* compiled code */`。
   例如，`JAVA_HOME` 指向只有 `rt.jar` 的 JDK 8 时，即使 `PATH` 上还有 JDK 17，跳转也会显示 JDK 8 的声明。
   JDK 9 及以上仍需要 `src.zip`。只预先列出归档目录，某个类第一次被查到时才解析。
-  跳进 JDK 时把那一个源码文件解压成只读副本，放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
+  跳转后的编辑器标签标明版本与来源，如 `String [JDK 1.8.0_512 - rt.jar].java`。源码或签名的只读副本放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
   不写插件包或应用安装目录。
 
 解析规则来自 [Viff](https://github.com/1lck/viff)（MIT），见 `internal/codenav/UPSTREAM.md` 和 `THIRD_PARTY_NOTICES.md`。

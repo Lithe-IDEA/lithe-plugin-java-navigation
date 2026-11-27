@@ -58,6 +58,9 @@ func TestSourcesExtractAndMapBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(file)
+	if got := filepath.Base(file); got != "String [JDK 17.0.18 - src.zip].java" {
+		t.Errorf("tab name = %q", got)
+	}
 	if err != nil || string(b) != "package java.lang;\npublic final class String {}\n" {
 		t.Fatalf("extracted %q, %v", b, err)
 	}

@@ -365,3 +365,30 @@ func TestLocalRepositoryHonoursSettings(t *testing.T) {
 		t.Errorf("from settings = %s, want %s", got, custom)
 	}
 }
+
+// A forked compiler can differ from the Java installation running Maven.
+func TestMavenCompilerExecutable(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "module")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(root, "jdk 8", "bin", "javac")
+	t.Setenv("TEST_MAVEN_JAVAC", exe)
+	parent := `<project><artifactId>parent</artifactId><build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><fork>true</fork><executable>${compiler}</executable></configuration></plugin></plugins></build></project>`
+	module := `<project><parent><artifactId>parent</artifactId></parent><properties><compiler>${env.TEST_MAVEN_JAVAC}</compiler></properties></project>`
+	for dir, pom := range map[string]string{root: parent, child: module} {
+		if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte(pom), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != exe {
+		t.Fatalf("got %q, want %q", got, exe)
+	}
+	if err := os.WriteFile(filepath.Join(child, "pom.xml"), []byte(`<project><properties><maven.compiler.release>8</maven.compiler.release><maven.compiler.executable>${env.TEST_MAVEN_JAVAC}</maven.compiler.executable></properties></project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != "" {
+		t.Fatalf("unforked compiler selected %q", got)
+	}
+}

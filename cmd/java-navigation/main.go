@@ -5,11 +5,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/backend"
@@ -36,6 +38,7 @@ func main() {
 	state := flag.String("state-dir", "", "writable directory for extracted JDK sources (the host's ${stateDir})")
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	noJDK := flag.Bool("no-jdk", false, "do not navigate into the JDK's sources")
+	jdkHome := flag.String("jdk-home", "", "Java installation selected for this workspace")
 	noDeps := flag.Bool("no-dependencies", false, "do not navigate into dependency jars (Maven, Gradle and the jars the project keeps)")
 	runBackend := flag.Bool("backend", false, "run as a Lithe plugin backend over stdio")
 	flag.Bool("stdio", true, "speak LSP over standard input and output (the only transport)")
@@ -52,7 +55,16 @@ func main() {
 	logger := log.New(os.Stderr, "java-navigation: ", log.LstdFlags|log.Lmsgprefix)
 	opt := lsp.Options{Name: "java-navigation", Version: version, State: *state, Logf: logger.Printf}
 	if !*noJDK && *state != "" {
-		opt.FindJDK = jdk.FindJDK
+		opt.FindJDK = func(ctx context.Context, root string) (jdk.JDK, bool) {
+			selected := *jdkHome
+			if exe := deps.MavenCompilerExecutable(ctx, root, logger.Printf); exe != "" {
+				if real, err := filepath.EvalSymlinks(exe); err == nil {
+					exe = real
+				}
+				selected = filepath.Dir(filepath.Dir(exe))
+			}
+			return jdk.FindJDK(ctx, selected, logger.Printf)
+		}
 	}
 	if !*noDeps && *state != "" {
 		opt.Dependencies = true

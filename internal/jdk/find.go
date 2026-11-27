@@ -28,7 +28,14 @@ type JDK struct {
 // It reads environment variables, starts at most one short-lived process
 // (macOS) and lists a few well-known install directories; it does not search
 // the disk.
-func FindJDK(ctx context.Context) (JDK, bool) {
+func FindJDK(ctx context.Context, selected string, logf func(string, ...any)) (JDK, bool) {
+	if selected != "" {
+		j, ok := jdkAt(selected)
+		if !ok {
+			logf("selected workspace JDK has no navigable archive: %s", selected)
+		}
+		return j, ok
+	}
 	home, _ := os.UserHomeDir()
 	return pickJDK(jdkPreferred(ctx), jdkInstalled(runtime.GOOS, home, os.Getenv))
 }

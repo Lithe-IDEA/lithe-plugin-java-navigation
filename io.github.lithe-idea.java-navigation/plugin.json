@@ -4,6 +4,7 @@
   "displayName": "Java Support Lite",
   "version": "0.2.1",
   "pluginAPIVersion": 0,
+  "requiresTools": ["java"],
   "requires": {
     "backend": 0,
     "languageServers": 0,
@@ -47,16 +48,10 @@
       "languageID": "java",
       "languageIdentifier": "java",
       "launch": {
-        "kind": "packaged",
-        "path": "bin/java-navigation"
+        "kind": "backend",
+        "function": "javaNavigation.resolveLaunch"
       },
-      "arguments": [
-        "--state-dir",
-        "${stateDir}"
-      ],
-      "validationArguments": [
-        "--version"
-      ],
+      "remote": "unsupported",
       "requestMethods": [
         "textDocument/implementation",
         "javaNavigation/superDeclarations",

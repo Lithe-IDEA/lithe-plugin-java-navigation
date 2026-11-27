@@ -297,7 +297,7 @@ public final class String implements CharSequence {
 	if err != nil || !ok {
 		t.Fatalf("String = %v %v", ok, err)
 	}
-	if !strings.Contains(filepath.ToSlash(tgt.File), "/jdk-sources/jdk-17.0.18-") || !strings.HasSuffix(filepath.ToSlash(tgt.File), "java.base/java/lang/String.java") || tgt.Line != 2 {
+	if !strings.Contains(filepath.ToSlash(tgt.File), "/jdk-sources/jdk-17.0.18-") || !strings.HasSuffix(filepath.ToSlash(tgt.File), "java.base/java/lang/String [JDK 17.0.18 - src.zip].java") || tgt.Line != 2 {
 		t.Fatalf("String target = %+v", tgt)
 	}
 	// The copy is a JDK source, and navigation continues inside it.
@@ -307,7 +307,7 @@ public final class String implements CharSequence {
 	}
 	lib, _ := os.ReadFile(tgt.File)
 	next, ok, err := w.Definition(ctx(t), ldoc, lib, at(t, string(lib), "CharSequence", 0, 1))
-	if err != nil || !ok || !strings.HasSuffix(filepath.ToSlash(next.File), "java/lang/CharSequence.java") {
+	if err != nil || !ok || !strings.HasSuffix(filepath.ToSlash(next.File), "java/lang/CharSequence [JDK 17.0.18 - src.zip].java") {
 		t.Errorf("CharSequence from the copy = %+v %v %v", next, ok, err)
 	}
 	// A local in a JDK source has its usages in that file.
@@ -319,7 +319,7 @@ public final class String implements CharSequence {
 	src := "package com.acme.service;\nclass H { int f(UserService s) { return s.hashCode(); } }\n"
 	hdoc := w.DocOf(filepath.Join(root, "src/main/java/com/acme/service/H.java"))
 	h, ok, err := w.Definition(ctx(t), hdoc, []byte(src), at(t, src, "hashCode", 0, 1))
-	if err != nil || !ok || !strings.HasSuffix(filepath.ToSlash(h.File), "java/lang/Object.java") {
+	if err != nil || !ok || !strings.HasSuffix(filepath.ToSlash(h.File), "java/lang/Object [JDK 17.0.18 - src.zip].java") {
 		t.Errorf("hashCode = %+v %v %v", h, ok, err)
 	}
 }

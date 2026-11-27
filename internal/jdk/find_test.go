@@ -109,6 +109,23 @@ func TestJava8RuntimeDeclarations(t *testing.T) {
 	}
 }
 
+func TestSelectedJDKPrecedesEnvironment(t *testing.T) {
+	root := t.TempDir()
+	system := fakeJDK(t, filepath.Join(root, "jdk17"), "17", "src.zip")
+	selected := fakeJDK(t, filepath.Join(root, "jdk8"), "1.8.0_512", "lib/rt.jar")
+	t.Setenv("JAVA_HOME", system)
+	j, ok := FindJDK(t.Context(), selected, t.Logf)
+	if !ok || j.Home != selected {
+		t.Fatalf("workspace selection = %+v, want %s", j, selected)
+	}
+	if _, ok := FindJDK(t.Context(), filepath.Join(root, "missing"), t.Logf); ok {
+		t.Fatal("unusable selected JDK silently resolved to a different installation")
+	}
+	if j, ok := FindJDK(t.Context(), "", t.Logf); !ok || j.Home != system {
+		t.Fatalf("automatic selection = %+v, want %s", j, system)
+	}
+}
+
 func TestCompareJavaVersions(t *testing.T) {
 	for _, c := range []struct {
 		a, b string

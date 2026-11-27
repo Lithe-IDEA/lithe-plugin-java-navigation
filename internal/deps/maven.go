@@ -44,6 +44,7 @@ type Jar struct {
 }
 
 type pomDep struct {
+	strict     bool   // an exact or bounded Gradle strictly selector
 	GroupID    string `xml:"groupId"`
 	ArtifactID string `xml:"artifactId"`
 	Version    string `xml:"version"`
@@ -140,7 +141,7 @@ func MavenJars(ctx context.Context, poms []string, repo string, logf func(string
 			roots = append(roots, mo)
 		}
 	}
-	return m.resolve(roots)
+	return m.resolve(roots, nil)
 }
 
 func newMaven(ctx context.Context, repo *localRepo, logf func(string, ...any)) *maven {
@@ -152,7 +153,7 @@ func newMaven(ctx context.Context, repo *localRepo, logf func(string, ...any)) *
 }
 
 // resolve follows the POMs of the direct dependencies supplied by the build files.
-func (m *maven) resolve(roots []*model) ([]Jar, error) {
+func (m *maven) resolve(roots []*model, chooseGradleVersion func(pomDep, string) string) ([]Jar, error) {
 	if err := m.ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -176,10 +177,10 @@ func (m *maven) resolve(roots []*model) ([]Jar, error) {
 		it := queue[0]
 		queue = queue[1:]
 		d := it.dep
-		if d.GroupID == "" || d.ArtifactID == "" || seen[gaOf(d)+":"+d.Classifier] {
+		key := gaOf(d) + ":" + d.Classifier
+		if d.GroupID == "" || d.ArtifactID == "" || (chooseGradleVersion == nil && seen[key]) {
 			continue
 		}
-		seen[gaOf(d)+":"+d.Classifier] = true
 		if _, own := m.tree[gaOf(d)]; own {
 			continue // a module of the working tree: its sources are indexed
 		}
@@ -188,6 +189,13 @@ func (m *maven) resolve(roots []*model) ([]Jar, error) {
 			version = md.Version
 		}
 		version = m.repo.pick(d.GroupID, d.ArtifactID, version)
+		if chooseGradleVersion != nil {
+			version = chooseGradleVersion(d, version)
+			if seen[key] {
+				continue
+			}
+		}
+		seen[key] = true
 		if version == "" {
 			continue
 		}
@@ -590,6 +598,9 @@ func (r *localRepo) jar(group, artifact, version, classifier string) (string, bo
 // its POM or jar, else the highest version it has (a range, an unresolved
 // property or a version that was never downloaded).
 func (r *localRepo) pick(group, artifact, version string) string {
+	if r.gradle && strings.ContainsAny(version, "[](),") {
+		return gradleRangeVersion(version, r.list(group, artifact))
+	}
 	if version != "" && !strings.ContainsAny(version, "${[(,") {
 		if r.gradle {
 			return version // look up the declared version, including classifier-only jars

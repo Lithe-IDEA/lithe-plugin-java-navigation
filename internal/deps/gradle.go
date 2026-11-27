@@ -2,7 +2,9 @@ package deps
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,7 +37,77 @@ func GradleJars(ctx context.Context, scripts []string, catalogPath string, logf 
 			root.deps = append(root.deps, gradleDeclarations(src, catalog)...)
 		}
 	}
-	return m.resolve([]*model{root})
+	return m.resolveGradle(root)
+}
+
+// A higher request can be discovered after the lower version's POM has
+// already been walked. Walk again with the winners so dependencies unique
+// to an evicted version disappear too.
+func (m *maven) resolveGradle(root *model) ([]Jar, error) {
+	type selection struct {
+		version string
+		strict  bool
+	}
+	var previous map[string]selection
+	const maxConflictPasses = 32
+	for range maxConflictPasses {
+		requests := map[string]selection{}
+		used := map[string]selection{}
+		choose := func(dep pomDep, version string) string {
+			key := gaOf(dep)
+			want := selection{version, dep.strict}
+			old, ok := requests[key]
+			if !ok || (want.strict && !old.strict) || (want.strict == old.strict && compareVersions(version, old.version) > 0) {
+				requests[key] = want
+			}
+			if _, ok := used[key]; !ok {
+				chosen, ok := previous[key]
+				if !ok {
+					chosen = want
+				}
+				used[key] = chosen
+			}
+			return used[key].version
+		}
+		jars, err := m.resolve([]*model{root}, choose)
+		if err != nil || maps.Equal(used, requests) {
+			return jars, err
+		}
+		previous = requests
+	}
+	return nil, fmt.Errorf("Gradle dependency versions did not converge after %d passes", maxConflictPasses)
+}
+
+// Gradle accepts both Maven-style open bounds and the reversed-bracket form.
+func gradleRangeVersion(selector string, versions []string) string {
+	if len(selector) < 3 {
+		return ""
+	}
+	left, right := selector[0], selector[len(selector)-1]
+	if !strings.ContainsRune("[(]", rune(left)) || !strings.ContainsRune("])[", rune(right)) {
+		return ""
+	}
+	lower, upper, interval := strings.Cut(selector[1:len(selector)-1], ",")
+	if strings.ContainsAny(lower+upper, "[](),") || lower == "" && upper == "" {
+		return ""
+	}
+	if !interval {
+		if left != '[' || right != ']' {
+			return ""
+		}
+		upper = lower
+	}
+	for i := len(versions) - 1; i >= 0; i-- {
+		v := versions[i]
+		lo, hi := compareVersions(v, lower), compareVersions(v, upper)
+		if lower != "" && (lo < 0 || lo == 0 && left != '[') {
+			continue
+		}
+		if upper == "" || hi < 0 || hi == 0 && right == ']' {
+			return v
+		}
+	}
+	return ""
 }
 
 func readGradleFile(path string) string {
@@ -168,6 +240,7 @@ func readGradleCatalog(path string, logf func(string, ...any)) map[string]pomDep
 		case string:
 			dep = gradleCoordinate(value)
 		case map[string]any:
+			strict := false
 			module, ok := value["module"].(string)
 			if !ok {
 				group, _ := value["group"].(string)
@@ -175,14 +248,22 @@ func readGradleCatalog(path string, logf func(string, ...any)) map[string]pomDep
 				module = group + ":" + name
 			}
 			if v, exists := value["version"]; exists {
-				version, _ := v.(string)
 				if ref, ok := v.(map[string]any); ok {
-					key, _ := ref["ref"].(string)
-					version, _ = catalog.Versions[key].(string)
+					if key, ok := ref["ref"].(string); ok {
+						v = catalog.Versions[key]
+					}
+				}
+				version, _ := v.(string)
+				if rich, ok := v.(map[string]any); ok {
+					version, strict = rich["strictly"].(string)
+					if !strict {
+						version, _ = rich["require"].(string)
+					}
 				}
 				module += ":" + version
 			}
 			dep = gradleCoordinate(module)
+			dep.strict = strict
 		}
 		aliases[accessor.Replace(alias)] = dep
 	}

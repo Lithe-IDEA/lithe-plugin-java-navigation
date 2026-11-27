@@ -41,13 +41,13 @@ func TestPickJDK(t *testing.T) {
 
 	// Without a preference: the newest JDK that has sources.
 	j, ok := pickJDK(nil, installed)
-	if !ok || j.Home != jdk17 || j.Version != "17.0.18" || j.Sources != filepath.Join(jdk17, "lib", "src.zip") {
+	if !ok || j.Home != jdk17 || j.Version != "17.0.18" || j.Archive != filepath.Join(jdk17, "lib", "src.zip") {
 		t.Errorf("newest = %+v ok=%v, want %s", j, ok, jdk17)
 	}
 	// A preferred JDK with sources wins over a newer one; JDK 8 keeps
 	// src.zip in its home.
 	j, ok = pickJDK([]string{"", jdk8}, installed)
-	if !ok || j.Home != jdk8 || j.Sources != filepath.Join(jdk8, "src.zip") {
+	if !ok || j.Home != jdk8 || j.Archive != filepath.Join(jdk8, "src.zip") {
 		t.Errorf("preferred = %+v ok=%v, want %s", j, ok, jdk8)
 	}
 	// A preferred JDK without sources falls through to the others.
@@ -74,6 +74,55 @@ func TestPickJDK(t *testing.T) {
 	// Nothing with sources.
 	if j, ok := pickJDK([]string{jdk21}, []string{jre}); ok {
 		t.Errorf("found %+v without any sources", j)
+	}
+}
+
+func TestJava8RuntimeDeclarations(t *testing.T) {
+	root := t.TempDir()
+	home := fakeJDK(t, filepath.Join(root, "jdk8"), "1.8.0_512", "")
+	newer := fakeJDK(t, filepath.Join(root, "jdk17"), "17", "src.zip")
+	jre := filepath.Join(home, "jre")
+	rt := filepath.Join(jre, "lib", "rt.jar")
+	if err := os.MkdirAll(filepath.Dir(rt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rt, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, preferred := range []string{home, jre} {
+		j, ok := pickJDK([]string{preferred, newer}, nil)
+		if !ok || j.Home != home || j.Archive != rt {
+			t.Fatalf("preferred %s: got %+v, want %s", preferred, j, rt)
+		}
+	}
+	j, ok := pickJDK(nil, []string{home})
+	if !ok || j.Archive != rt {
+		t.Fatalf("automatic discovery = %+v, want %s", j, rt)
+	}
+	src := filepath.Join(home, "src.zip")
+	if err := os.WriteFile(src, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j, ok = pickJDK([]string{jre}, nil)
+	if !ok || j.Archive != src {
+		t.Fatalf("with matching sources = %+v, want %s", j, src)
+	}
+}
+
+func TestSelectedJDKPrecedesEnvironment(t *testing.T) {
+	root := t.TempDir()
+	system := fakeJDK(t, filepath.Join(root, "jdk17"), "17", "src.zip")
+	selected := fakeJDK(t, filepath.Join(root, "jdk8"), "1.8.0_512", "lib/rt.jar")
+	t.Setenv("JAVA_HOME", system)
+	j, ok := FindJDK(t.Context(), selected, t.Logf)
+	if !ok || j.Home != selected {
+		t.Fatalf("workspace selection = %+v, want %s", j, selected)
+	}
+	if _, ok := FindJDK(t.Context(), filepath.Join(root, "missing"), t.Logf); ok {
+		t.Fatal("unusable selected JDK silently resolved to a different installation")
+	}
+	if j, ok := FindJDK(t.Context(), "", t.Logf); !ok || j.Home != system {
+		t.Fatalf("automatic selection = %+v, want %s", j, system)
 	}
 }
 

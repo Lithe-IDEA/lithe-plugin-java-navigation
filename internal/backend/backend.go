@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,9 @@ func New(version string) (*lithe.Backend, error) {
 	if err := b.Function(CollectFunctionID, svc.collect); err != nil {
 		return nil, err
 	}
+	if err := b.Function("javaNavigation.resolveLaunch", resolveLaunch); err != nil {
+		return nil, err
+	}
 	if err := b.SuppressSuccessDiagnostics(CollectFunctionID); err != nil {
 		return nil, err
 	}
@@ -121,6 +125,41 @@ func New(version string) (*lithe.Backend, error) {
 		svc.shutdown()
 	})
 	return b, nil
+}
+
+// resolveLaunch receives the optional workspace Java tool resolved by Lithe's
+// Build/Run resolver. Always launch the Go server shipped for this platform.
+func resolveLaunch(params json.RawMessage, _ *lithe.Context) (any, error) {
+	var p struct {
+		StateDirectory string
+		Platform       struct{ OS string }
+		Tools          map[string]struct{ Home, Executable string }
+	}
+	if json.Unmarshal(params, &p) != nil || p.StateDirectory == "" {
+		return nil, lithe.NewPluginError(errInvalidParams, "Missing launch directories.")
+	}
+	executable := "bin/java-navigation"
+	if p.Platform.OS == "windows" {
+		executable += ".exe"
+	}
+	args := []string{"--state-dir", p.StateDirectory}
+	if java, ok := p.Tools["java"]; ok {
+		home := java.Home
+		if home == "" && filepath.IsAbs(java.Executable) {
+			exe := java.Executable
+			if real, err := filepath.EvalSymlinks(exe); err == nil {
+				exe = real
+			}
+			home = filepath.Dir(filepath.Dir(exe))
+		}
+		if home != "" {
+			args = append(args, "--jdk-home", home)
+		}
+	}
+	return map[string]any{
+		"executable": map[string]string{"kind": "packaged", "path": executable},
+		"arguments":  args,
+	}, nil
 }
 
 func (s *Service) shutdown() {

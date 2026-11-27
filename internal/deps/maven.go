@@ -3,6 +3,7 @@ package deps
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -72,6 +73,13 @@ type pomXML struct {
 	Properties   properties `xml:"properties"`
 	Managed      []pomDep   `xml:"dependencyManagement>dependencies>dependency"`
 	Dependencies []pomDep   `xml:"dependencies>dependency"`
+	Plugins      []struct {
+		Group      string `xml:"groupId"`
+		Artifact   string `xml:"artifactId"`
+		Fork       string `xml:"configuration>fork"`
+		Executable string `xml:"configuration>executable"`
+		Inherited  string `xml:"inherited"`
+	} `xml:"build>plugins>plugin"`
 }
 
 type properties map[string]string
@@ -103,6 +111,71 @@ type model struct {
 	props                    map[string]string
 	managed                  map[string]pomDep // by depKey
 	deps                     []pomDep
+}
+
+// MavenCompilerExecutable reads a workspace root POM's explicit forked javac.
+// Compiler release/source/target levels do not identify an installation.
+// Walking just the local parent chain avoids resolving dependency BOMs during
+// JDK discovery. A non-local parent or a dynamic profile needs a build import.
+func MavenCompilerExecutable(ctx context.Context, root string, logf func(string, ...any)) string {
+	m := newMaven(ctx, nil, logf)
+	pom := filepath.Join(root, "pom.xml")
+	props := properties{"project.basedir": root, "basedir": root}
+	var fork, executable string
+	for depth := 0; depth < maxParents && ctx.Err() == nil; depth++ {
+		p := m.readPOM(pom)
+		if p == nil {
+			break
+		}
+		for k, v := range p.Properties {
+			if _, exists := props[k]; !exists {
+				props[k] = v
+			}
+		}
+		for _, plugin := range p.Plugins {
+			if plugin.Artifact != "maven-compiler-plugin" || (plugin.Group != "" && plugin.Group != "org.apache.maven.plugins") || (depth > 0 && plugin.Inherited == "false") {
+				continue
+			}
+			if fork == "" {
+				fork = plugin.Fork
+			}
+			if executable == "" {
+				executable = plugin.Executable
+			}
+		}
+		if p.Parent.ArtifactID == "" {
+			break
+		}
+		pom = m.localParent(pom, p)
+		if pom == "" {
+			break
+		}
+		// A relative path can point at another version of the parent checked
+		// out alongside this module. Maven won't inherit its compiler.
+		parent := m.readPOM(pom)
+		if cmp.Or(parent.GroupID, parent.Parent.GroupID) != p.Parent.GroupID ||
+			cmp.Or(parent.Version, parent.Parent.Version) != p.Parent.Version {
+			break
+		}
+	}
+	if fork == "" {
+		fork = props["maven.compiler.fork"]
+	}
+	if !strings.EqualFold(m.interpolate(fork, props), "true") {
+		return ""
+	}
+	if executable == "" {
+		executable = props["maven.compiler.executable"]
+	}
+	executable = m.interpolate(executable, props)
+	if strings.Contains(executable, "${") || !filepath.IsAbs(executable) {
+		return ""
+	}
+	name := filepath.Base(executable)
+	if name != "javac" && !strings.EqualFold(name, "javac.exe") {
+		return ""
+	}
+	return executable
 }
 
 func depKey(d pomDep) string {
@@ -408,17 +481,9 @@ func (m *maven) model(path string) *model {
 // names (../pom.xml by default) when that is the parent, else the working
 // tree's POM of those coordinates, else the local repository's.
 func (m *maven) parentOf(path string, p *pomXML) *model {
-	rel := "../pom.xml"
-	if p.Parent.RelativePath != nil {
-		rel = strings.TrimSpace(*p.Parent.RelativePath)
-	}
 	// Gradle's hash directories never contain a source tree's relative parent.
-	if rel != "" && !m.repo.gradle {
-		cand := filepath.Join(filepath.Dir(path), filepath.FromSlash(rel))
-		if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
-			cand = filepath.Join(cand, "pom.xml")
-		}
-		if pp := m.readPOM(cand); pp != nil && pp.ArtifactID == p.Parent.ArtifactID {
+	if !m.repo.gradle {
+		if cand := m.localParent(path, p); cand != "" {
 			return m.model(cand)
 		}
 	}
@@ -430,6 +495,24 @@ func (m *maven) parentOf(path string, p *pomXML) *model {
 		return m.model(pom)
 	}
 	return nil
+}
+
+func (m *maven) localParent(path string, p *pomXML) string {
+	rel := "../pom.xml"
+	if p.Parent.RelativePath != nil {
+		rel = strings.TrimSpace(*p.Parent.RelativePath)
+		if rel == "" {
+			return ""
+		}
+	}
+	cand := filepath.Join(filepath.Dir(path), filepath.FromSlash(rel))
+	if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
+		cand = filepath.Join(cand, "pom.xml")
+	}
+	if pp := m.readPOM(cand); pp != nil && pp.ArtifactID == p.Parent.ArtifactID {
+		return cand
+	}
+	return ""
 }
 
 func (m *maven) interpolateDep(d pomDep, props map[string]string) pomDep {

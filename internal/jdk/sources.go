@@ -18,13 +18,12 @@ import (
 	"time"
 
 	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/codenav"
+	"github.com/Lithe-IDEA/lithe-plugin-java-navigation/internal/deps"
 )
 
-// The JDK's class library sources, read from its src.zip (adapted from Viff's
-// ADR 0041). Only the archive's directory is read up front; codenav parses a
-// class the first time a lookup needs it. The archive is not kept open: each
-// read opens it, checks that it is still the file that was listed (a JDK
-// update replaces it) and reads one entry.
+// JDK archive indexing (adapted from Viff's ADR 0041). Only the directory
+// and entry offsets are read up front. Each lookup opens the archive once,
+// checks its identity and reads only the source or class entries it needs.
 
 // MaxFileSize skips sources too large to have been written by hand.
 const MaxFileSize = 2 << 20
@@ -32,15 +31,16 @@ const MaxFileSize = 2 << 20
 // ErrChanged reports an archive that changed since it was listed.
 var ErrChanged = errors.New("the JDK sources changed on disk")
 
-// Sources is the listed content of a JDK's src.zip. It never changes after
-// Open, so its methods run on any goroutine.
+// Sources provides Java text from src.zip or signature stubs from rt.jar.
+// It never changes after Open, so its methods run on any goroutine.
 type Sources struct {
 	version string
 	archive string
 	size    int64
 	mod     time.Time
-	entries map[string]entry // by entry name, .java files only
-	names   []string         // the entry names, in archive order
+	stubs   bool
+	entries map[string]entry // raw archive entries, including member classes for stubs
+	names   []string         // navigable .java paths, in archive order
 }
 
 // entry locates one stored or deflated file in the archive.
@@ -52,7 +52,7 @@ type entry struct {
 
 // Open lists the Java sources of j's archive.
 func Open(j JDK) (*Sources, error) {
-	f, err := os.Open(j.Sources)
+	f, err := os.Open(j.Archive)
 	if err != nil {
 		return nil, fmt.Errorf("open JDK sources: %w", err)
 	}
@@ -65,10 +65,21 @@ func Open(j JDK) (*Sources, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read JDK sources: %w", err)
 	}
-	s := &Sources{version: j.Version, archive: j.Sources, size: fi.Size(), mod: fi.ModTime(), entries: map[string]entry{}}
+	s := &Sources{version: j.Version, archive: j.Archive, size: fi.Size(), mod: fi.ModTime(), entries: map[string]entry{},
+		stubs: filepath.Base(j.Archive) == "rt.jar"}
 	names := make([]string, 0, len(zr.File))
 	for _, e := range zr.File {
-		if !codenav.Supports(e.Name) || e.FileInfo().IsDir() || e.Method != zip.Store && e.Method != zip.Deflate {
+		if e.FileInfo().IsDir() || e.Method != zip.Store && e.Method != zip.Deflate || !validEntry(e.Name) {
+			continue
+		}
+		name := e.Name
+		if s.stubs {
+			stem, ok := strings.CutSuffix(name, ".class")
+			if !ok || strings.HasPrefix(name, "META-INF/") {
+				continue
+			}
+			name = stem + ".java"
+		} else if !codenav.Supports(name) {
 			continue
 		}
 		off, err := e.DataOffset()
@@ -77,10 +88,13 @@ func Open(j JDK) (*Sources, error) {
 		}
 		s.entries[e.Name] = entry{off: off, csize: int64(e.CompressedSize64), size: int64(e.UncompressedSize64),
 			deflate: e.Method == zip.Deflate, crc: e.CRC32}
-		names = append(names, e.Name)
+		// A member class is rendered in its top-level class's stub.
+		if !s.stubs || !strings.Contains(path.Base(name), "$") {
+			names = append(names, name)
+		}
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("read JDK sources: no Java sources in %s", j.Sources)
+		return nil, fmt.Errorf("read JDK library: no declarations in %s", j.Archive)
 	}
 	s.names = names
 	return s, nil
@@ -93,11 +107,21 @@ func (s *Sources) Names() []string { return s.names }
 // Version is the JDK's JAVA_VERSION, "" when unknown.
 func (s *Sources) Version() string { return s.version }
 
-// Archive is the absolute path of the listed src.zip.
+// Archive is the absolute path of the listed src.zip or rt.jar.
 func (s *Sources) Archive() string { return s.archive }
+
+// UsesStubs reports whether navigation displays signatures instead of source text.
+func (s *Sources) UsesStubs() bool { return s.stubs }
 
 // Has reports whether name is a listed Java source.
 func (s *Sources) Has(name string) bool {
+	if s.stubs {
+		stem, ok := strings.CutSuffix(name, ".java")
+		if !ok || strings.Contains(path.Base(stem), "$") {
+			return false
+		}
+		name = stem + ".class"
+	}
 	_, ok := s.entries[name]
 	return ok
 }
@@ -110,12 +134,8 @@ func (s *Sources) Changed() bool {
 
 // Read returns the content of one listed entry.
 func (s *Sources) Read(name string) ([]byte, error) {
-	e, ok := s.entries[name]
-	if !ok {
+	if !s.Has(name) {
 		return nil, fmt.Errorf("%s: %w", name, fs.ErrNotExist)
-	}
-	if e.size > MaxFileSize {
-		return nil, fmt.Errorf("%s: larger than %d bytes", name, MaxFileSize)
 	}
 	f, err := os.Open(s.archive)
 	if err != nil {
@@ -124,6 +144,25 @@ func (s *Sources) Read(name string) ([]byte, error) {
 	defer f.Close()
 	if fi, err := f.Stat(); err != nil || fi.Size() != s.size || !fi.ModTime().Equal(s.mod) {
 		return nil, ErrChanged
+	}
+	if s.stubs {
+		read := func(name string) ([]byte, error) { return s.readEntry(f, name, deps.MaxEntrySize) }
+		has := func(name string) bool {
+			_, ok := s.entries[name]
+			return ok
+		}
+		return deps.ClassStub(filepath.Base(s.archive), strings.TrimSuffix(name, ".java"), read, has)
+	}
+	return s.readEntry(f, name, MaxFileSize)
+}
+
+func (s *Sources) readEntry(f *os.File, name string, limit int64) ([]byte, error) {
+	e, ok := s.entries[name]
+	if !ok {
+		return nil, fmt.Errorf("%s: %w", name, fs.ErrNotExist)
+	}
+	if e.size < 0 || e.size > limit {
+		return nil, fmt.Errorf("%s: invalid size %d (limit %d)", name, e.size, limit)
 	}
 	var r io.Reader = io.NewSectionReader(f, e.off, e.csize)
 	if e.deflate {
@@ -145,7 +184,11 @@ func (s *Sources) Read(name string) ([]byte, error) {
 // these sources. It is named after the archive's identity (path, size and
 // modification time), so a replaced JDK never reuses copies of the old one.
 func (s *Sources) CacheDir(state string) string {
-	h := sha256.Sum256([]byte(s.archive + "\x00" + strconv.FormatInt(s.size, 10) + "\x00" + s.mod.UTC().Format(time.RFC3339Nano)))
+	id := s.archive + "\x00" + strconv.FormatInt(s.size, 10) + "\x00" + s.mod.UTC().Format(time.RFC3339Nano)
+	if s.stubs {
+		id += "\x00stub " + deps.StubFormat
+	}
+	h := sha256.Sum256([]byte(id))
 	name := "jdk"
 	if s.version != "" {
 		name += "-" + sanitize(s.version)
@@ -162,8 +205,13 @@ func (s *Sources) Extract(state, name string) (string, error) {
 	if !s.Has(name) || !validEntry(name) {
 		return "", fmt.Errorf("%s: %w", name, fs.ErrNotExist)
 	}
-	dst := filepath.Join(s.CacheDir(state), filepath.FromSlash(name))
-	if fi, err := os.Stat(dst); err == nil && fi.Mode().IsRegular() && fi.Size() == s.entries[name].size {
+	ext := path.Ext(name)
+	tabName := strings.TrimSuffix(path.Base(name), ext) + s.tabLabel() + ext
+	if len(tabName) > 255 {
+		tabName = path.Base(name)
+	}
+	dst := filepath.Join(s.CacheDir(state), filepath.FromSlash(path.Dir(name)), tabName)
+	if fi, err := os.Stat(dst); err == nil && fi.Mode().IsRegular() && (s.stubs || fi.Size() == s.entries[name].size) {
 		return dst, nil
 	}
 	b, err := s.Read(name)
@@ -191,7 +239,7 @@ func (s *Sources) Extract(state, name string) (string, error) {
 		os.Remove(tmp.Name())
 		// Another request may have extracted the same entry; Windows refuses
 		// to replace a read-only file.
-		if fi, serr := os.Stat(dst); serr == nil && fi.Size() == s.entries[name].size {
+		if fi, serr := os.Stat(dst); serr == nil && fi.Mode().IsRegular() && fi.Size() == int64(len(b)) {
 			return dst, nil
 		}
 		return "", fmt.Errorf("extract JDK source: %w", err)
@@ -207,12 +255,26 @@ func (s *Sources) EntryOf(state, file string) (string, bool) {
 		return "", false
 	}
 	name := filepath.ToSlash(rel)
-	return name, s.Has(name)
+	ext := path.Ext(name)
+	if stem, ok := strings.CutSuffix(strings.TrimSuffix(name, ext), s.tabLabel()); ok && s.Has(stem+ext) {
+		return stem + ext, true
+	}
+	return name, s.Has(name) // also recognize copies opened before tabs were labeled
+}
+
+// Put provenance in the tab title, even when opening a method hundreds of
+// lines from the top. Keep the archive text and LSP positions byte-for-byte.
+func (s *Sources) tabLabel() string {
+	version := sanitize(s.version)
+	if version == "" {
+		version = "unknown"
+	}
+	return " [JDK " + version + " - " + filepath.Base(s.archive) + "]"
 }
 
 // validEntry refuses entry names that would escape the cache directory.
 func validEntry(name string) bool {
-	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, ":") {
+	if name == "" || strings.HasPrefix(name, "/") || strings.ContainsAny(name, "\\:"+deps.Sep) {
 		return false
 	}
 	return path.Clean(name) == name && !strings.HasPrefix(name, "../") && name != ".."

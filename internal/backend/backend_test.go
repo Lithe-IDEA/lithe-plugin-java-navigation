@@ -184,6 +184,26 @@ func TestBackendRegistrationCollectAndInvokeWithQuietLogging(t *testing.T) {
 		t.Fatalf("initialize failed: %+v", initResp)
 	}
 	m.notify("initialized", map[string]any{})
+	// Start through the same backend function the host uses. Java is only
+	// an optional navigation input, never the language server executable.
+	for i, tc := range []struct {
+		tools any
+		want  []string
+	}{
+		{nil, []string{"--state-dir", "/state"}},
+		{map[string]any{"java": map[string]string{"home": "/selected/jdk 8", "version": "1.8"}}, []string{"--state-dir", "/state", "--jdk-home", "/selected/jdk 8"}},
+	} {
+		id := 30 + i
+		m.request(id, "lithe/function/invoke", map[string]any{
+			"functionID": "javaNavigation.resolveLaunch", "operationID": fmt.Sprintf("op-launch-%d", i), "context": ctxRef,
+			"params": map[string]any{"serverID": "java", "stateDirectory": "/state", "platform": map[string]string{"os": "windows"}, "tools": tc.tools},
+		})
+		frame, _ := m.runUntil(func(f map[string]any) bool { return f["id"] == float64(id) }, func(string, map[string]any) any { return map[string]any{} })
+		launch := mapField(frame, "result")
+		if mapField(launch, "executable")["path"] != "bin/java-navigation.exe" || fmt.Sprint(launch["arguments"]) != fmt.Sprint(tc.want) {
+			t.Fatalf("unexpected launch answer: %+v", frame)
+		}
+	}
 	m.notify(methodDidChangeState, map[string]any{
 		"serverID": "java",
 		"state":    "running",

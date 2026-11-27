@@ -26,7 +26,7 @@ type Options struct {
 	// State is the writable directory for extracted JDK sources.
 	State string
 	// FindJDK locates the JDK whose sources are used; nil disables them.
-	FindJDK func(context.Context) (jdk.JDK, bool)
+	FindJDK func(context.Context, string) (jdk.JDK, bool)
 	// Dependencies enables navigation into dependency jars (see
 	// workspace.Options.Dependencies).
 	Dependencies bool
@@ -317,7 +317,9 @@ func (s *Server) newWorkspace(root string) *workspace.Workspace {
 	o := s.opt.Workspace
 	o.Root = root
 	o.State = s.opt.State
-	o.FindJDK = s.opt.FindJDK
+	if s.opt.FindJDK != nil {
+		o.FindJDK = func(ctx context.Context) (jdk.JDK, bool) { return s.opt.FindJDK(ctx, root) }
+	}
 	o.Dependencies = s.opt.Dependencies
 	o.MavenRepo = s.opt.MavenRepo
 	if o.Logf == nil {

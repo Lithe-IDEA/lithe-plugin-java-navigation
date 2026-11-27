@@ -38,8 +38,8 @@ if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(manifest.version)) problems.push(`version $
 if (manifest.vendor?.signatureRequirement !== "none") problems.push('vendor.signatureRequirement must be "none"');
 if (manifest.id === "dev.lithe" || manifest.id.startsWith("dev.lithe.")) problems.push("dev.lithe.* is reserved for official plugins");
 const servers = manifest.languageServers ?? [];
-if (servers.length !== 1 || servers[0].launch?.kind !== "packaged" || servers[0].launch?.path !== `bin/${BINARY}`) {
-  problems.push(`plugin.json must declare one packaged language server at bin/${BINARY}`);
+if (servers.length !== 1 || servers[0].launch?.kind !== "backend" || servers[0].launch?.function !== "javaNavigation.resolveLaunch") {
+  problems.push("plugin.json must start the language server with javaNavigation.resolveLaunch");
 }
 const backend = manifest.backend;
 if (backend?.launch?.kind !== "packaged" || backend?.launch?.path !== `bin/${BINARY}`) {
@@ -89,7 +89,6 @@ for (const target of targets) {
   );
   chmodSync(join(pkg, "bin", exe), 0o755);
   const platformManifest = structuredClone(manifest);
-  platformManifest.languageServers[0].launch.path = `bin/${exe}`;
   platformManifest.backend.launch.path = `bin/${exe}`;
   writeFileSync(join(pkg, "plugin.json"), `${JSON.stringify(platformManifest, null, 2)}\n`);
   for (const file of INCLUDED) {

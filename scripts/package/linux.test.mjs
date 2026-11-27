@@ -14,7 +14,8 @@ for (const [arch,machine] of [['arm64',183],['x64',62]]) {
   const archive=resolve(`dist/java-navigation-${version}-linux-${arch}.zip`);
   const manifest=JSON.parse(read(archive,'plugin.json'));
   assert.equal(manifest.version,version);
-  const path=manifest.languageServers[0].launch.path;
+  assert.equal(manifest.languageServers[0].launch.function,'javaNavigation.resolveLaunch');
+  const path=manifest.backend.launch.path;
   assert.equal(path,'bin/java-navigation');
   const binary=read(archive,path);
   assert.deepEqual([...binary.subarray(0,6)],[127,69,76,70,2,1]);

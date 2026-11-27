@@ -21,7 +21,7 @@
 | 跳转到定义 | 类型、方法、构造器、字段、枚举常量、局部变量、参数、类型参数、注解及其属性；按导入、同包、通配导入、嵌套、继承链、调用参数个数和实参类型解析，支持调用链 `a.b().c` 和 `Foo.<T>bar()` |
 | 实现 / 父类双向跳转 | 接口/父类向下跳转到实现类与重写方法（`textDocument/implementation`），实现类/重写方法向上跳回接口与父类声明（`javaNavigation/superDeclarations`），并在行首绘制绿色 `I↓`/`I↑` 与蓝色 `O↓`/`O↑` 导航图标 |
 | Lombok | `@Data`/`@Getter`/`@Setter` 生成的访问器跳到字段，`@Builder`、`@Slf4j`、构造器注解跳到注解本身（与 JDT LS 一致） |
-| 跳进 JDK | 项目里找不到的名字到本机 JDK 的 `src.zip` 里找，`String`、`List`、`hashCode()` 等都能跳，并能在 JDK 源码里继续跳 |
+| 跳进 JDK | 打开本机 JDK 源码中的类和方法，例如 `String`、`List`、`hashCode()`。JDK 8 缺少源码包时，从它的 `rt.jar` 生成只读声明，支持继续跳转 |
 | 跳进依赖库 | Maven 和 Gradle 的依赖（含传递依赖）从本地仓库或缓存读取：下载过 `-sources.jar` 的打开源码，否则打开从 `.class` 生成的签名存根（类、成员类、字段、构造器、方法，参数名取自调试信息），并能在里面继续跳；`@Schema(description = ...)`、`log.info(...)`、`StrUtil.isEmpty(...)` 都能跳 |
 | 老项目的 jar | 读 Eclipse `.classpath`、Ant `build.xml` 的静态类路径，以及 `lib/`、`libs/`、`WEB-INF/lib` 里的 jar |
 | Eclipse 容器 | `.classpath` 里的服务器运行时容器（Tomcat、Jetty、WildFly 等）和 JUnit 容器换成本机已有的 jar，`HttpServletRequest`、`@WebServlet`、`@Test` 都能跳；没有 pom 的 `WEB-INF/web.xml` Web 项目同样补上 Servlet/JSP API |
@@ -62,9 +62,13 @@
   项目自己已经带了 Servlet 或 JUnit 的 jar 时不再补。没有 `pom.xml`/Gradle 构建文件、但有 `WEB-INF/web.xml` 的
   项目按 Servlet 容器处理（web.xml 用 Jakarta EE 命名空间时取 `jakarta.servlet`）。不联网下载，本机都没有就跳过。
 - 构建脚本、Gradle 版本目录、`pom.xml`、`.classpath` 或工作区内的 jar 变了、或距上次读取超过 5 分钟，下一次扫描重新读取依赖。
-- JDK：按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
-  （含 IntelliJ 的 `~/.jdks`、SDKMAN!）的顺序找第一个带 `src.zip` 的 JDK。只预先列出 zip 目录，某个类第一次被查到时才解析。
-  跳进 JDK 时把那一个源码文件解压成只读副本，放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
+- JDK：启动时采用 Lithe 为当前工作区解析的 `java` 工具。Maven 根 POM 或其本地父 POM 若显式启用 fork 且指定了绝对路径的 `javac`，使用该编译器所在的 JDK。插件不运行编译器，也不从 `source`、`target`、`release` 推断安装目录。Maven profile、按模块或执行阶段切换的编译器、构建工具内部另行选择的 toolchain 不在此解析范围。
+  选中的安装缺少可导航归档时，项目内导航仍然可用。宿主没有提供 Java 安装（例如没有启用定义 `java` 工具的插件），且 Maven 没有指定编译器时，按 `JAVA_HOME` → 系统默认 JDK（macOS 的 `/usr/libexec/java_home`，其他系统 `PATH` 上的 `java`）→ 常见安装目录
+  （含 IntelliJ 的 `~/.jdks`、SDKMAN!）查找可用于导航的 JDK。每套 JDK 优先使用自己的 `src.zip`。
+  JDK 8 缺少源码时，用同一套运行时的 `rt.jar` 按需生成类、字段和方法声明，方法体显示为 `/* compiled code */`。
+  例如，`JAVA_HOME` 指向只有 `rt.jar` 的 JDK 8 时，即使 `PATH` 上还有 JDK 17，跳转也会显示 JDK 8 的声明。
+  JDK 9 及以上仍需要 `src.zip`。只预先列出归档目录，某个类第一次被查到时才解析。
+  跳转后的编辑器标签标明版本与来源，如 `String [JDK 1.8.0_512 - rt.jar].java`。源码或签名的只读副本放在 Lithe 为插件分配的状态目录（`${stateDir}`）里，卸载插件时一起删除；
   不写插件包或应用安装目录。
 
 解析规则来自 [Viff](https://github.com/1lck/viff)（MIT），见 `internal/codenav/UPSTREAM.md` 和 `THIRD_PARTY_NOTICES.md`。
@@ -140,7 +144,7 @@ JSF 依赖没下载过，这轮 OpenCms 基准早于 Gradle 缓存支持）、�
   例如 `list.get(0).getName()` 里的 `getName`、`users.stream().map(u -> u.getName())` 里的 `getName`；
   按泛型实参才能区分的重载也会取第一个。
 - **`.jsp` 文件里不能跳转**：插件只处理 `.java` 文件，JSP 里的 `<% %>` 脚本、`<jsp:useBean>`、EL 表达式和标签库都不跳。
-- **只认一个 JDK**：用的是上面顺序找到的 JDK，不一定是项目编译用的版本。
+- **每个工作区使用一套 JDK**：宿主未提供 Java 安装时，插件无法区分“没有选择”和“宿主无法解析选择”，会按上面的规则查找。修改项目 JDK 或补装源码后，重新启动语言服务器以采用新配置。
 - **引用不含重写和实现**：查找方法的引用不包括子类重写的方法和通过接口调用到的其他声明。
 - **和 Java Support 二选一**：两个插件都为 Java 提供语言服务器，Lithe 同一时间只让一个已启用的插件服务一门语言。
   启用或安装其中一个，另一个会被自动停用，Lithe 会提示停用了哪个（需要包含
@@ -160,7 +164,7 @@ go run ./cmd/nav-bench -h         # 在真实项目上测命中率、延迟和�
 
 `internal/deps/testdata/fixture` 里的 jar 由同目录的 `build.sh` 用 javac 编出（需要 JDK 17+），测试只读提交的 jar；
 改了 `internal/deps/stub.go` 的输出时，运行 `go test ./internal/deps -run Golden -update` 更新
-`testdata/stubs`，并把 `stubFormat` 加一，让旧版本解压的副本不再被复用。
+`testdata/stubs`，并把 `StubFormat` 加一，让旧版本解压的副本不再被复用。
 
 `dist/` 里每个平台一个 zip（`darwin-arm64`、`darwin-x64`、`windows-x64`、`windows-arm64`），包内只有
 `plugin.json`、`bin/java-navigation`（Windows 是 `bin/java-navigation.exe`，对应平台包的 `plugin.json` 为语言服务器与 `--backend` 后端均写这个路径）、

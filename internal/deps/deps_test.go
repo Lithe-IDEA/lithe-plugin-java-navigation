@@ -365,3 +365,27 @@ func TestLocalRepositoryHonoursSettings(t *testing.T) {
 		t.Errorf("from settings = %s, want %s", got, custom)
 	}
 }
+
+// A forked compiler can differ from the Java installation running Maven.
+func TestMavenCompilerExecutable(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "module")
+	exe := filepath.Join(root, "jdk 8", "bin", "javac")
+	t.Setenv("TEST_MAVEN_JAVAC", exe)
+	parent := `<project><groupId>example</groupId><artifactId>parent</artifactId><version>1</version><build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><fork>true</fork><executable>${compiler}</executable></configuration></plugin></plugins></build></project>`
+	module := `<project><parent><groupId>example</groupId><artifactId>parent</artifactId><version>1</version></parent><properties><compiler>${env.TEST_MAVEN_JAVAC}</compiler></properties></project>`
+	writeFile(t, filepath.Join(root, "pom.xml"), parent)
+	pom := filepath.Join(child, "pom.xml")
+	writeFile(t, pom, module)
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != exe {
+		t.Fatalf("got %q, want %q", got, exe)
+	}
+	writeFile(t, pom, strings.Replace(module, "<version>1", "<version>2", 1))
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != "" {
+		t.Fatalf("unrelated local parent selected %q", got)
+	}
+	writeFile(t, pom, `<project><properties><maven.compiler.release>8</maven.compiler.release><maven.compiler.executable>${env.TEST_MAVEN_JAVAC}</maven.compiler.executable></properties></project>`)
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != "" {
+		t.Fatalf("unforked compiler selected %q", got)
+	}
+}

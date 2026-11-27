@@ -4,4 +4,4 @@ internal/deps/testdata/** -text
 
 # Keep vendored SDK files byte-identical to the checksums in sdk.lock.json.
 internal/lithesdk/lithe/*.go text eol=lf
-vendor/LICENSE text eol=lf
+licenses/lithe-sdk-LICENSE text eol=lf

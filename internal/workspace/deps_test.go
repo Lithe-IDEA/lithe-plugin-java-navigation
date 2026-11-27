@@ -82,6 +82,51 @@ const depsPOM = `<project><groupId>com.acme</groupId><artifactId>app</artifactId
   <dependency><groupId>com.example</groupId><artifactId>lib</artifactId><version>1.0</version></dependency>
 </dependencies></project>`
 
+func TestDefinitionIntoGradleDependencyAfterCatalogEdit(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	t.Setenv("GRADLE_USER_HOME", home)
+	cache := filepath.Join(home, "caches", "modules-2", "files-2.1")
+	for hash, file := range map[string]string{"a": "helper-2.0.jar", "b": "helper-2.0-sources.jar"} {
+		dir := filepath.Join(cache, "com.example", "helper", "2.0", hash)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		copyFile(t, filepath.Join("..", "deps", "testdata", "fixture", file), filepath.Join(dir, file))
+	}
+	before := treeHash(t, cache)
+	src := "import com.example.helper.Helper;\nclass A { String text = Helper.shout(\"x\"); }"
+	catalog := "gradle/libs.versions.toml"
+	write(t, root, map[string]string{
+		"app/A.java": src, "app/build.gradle.kts": "dependencies { implementation(libs.example.helper) }",
+		catalog: "[libraries]\nexample-helper = 'com.example:missing:1.0'",
+	})
+	w := New(Options{Root: root, State: t.TempDir(), Dependencies: true, ListFiles: walkFiles, Freshness: -1})
+	doc := w.DocOf(filepath.Join(root, "app", "A.java"))
+	lookup := func() (Target, bool) {
+		t.Helper()
+		target, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, "shout", 0, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return target, ok
+	}
+	if _, ok := lookup(); ok {
+		t.Fatal("resolved a cached library that the project did not declare")
+	}
+	write(t, root, map[string]string{catalog: "[versions]\nv = '2.0'\n[libraries]\nexample-helper = { module = 'com.example:helper', version.ref = 'v' }"})
+	target, ok := lookup()
+	if !ok {
+		t.Fatal("Gradle catalog edit did not make Helper.shout navigable")
+	}
+	body, err := os.ReadFile(target.File)
+	if err != nil || !strings.Contains(string(body), "return text.toUpperCase();") {
+		t.Errorf("expected the cached sources JAR: %s, %v", body, err)
+	}
+	if treeHash(t, cache) != before {
+		t.Error("the Gradle cache changed")
+	}
+}
+
 const useDeps = `package com.acme;
 
 import com.example.lib.Container;

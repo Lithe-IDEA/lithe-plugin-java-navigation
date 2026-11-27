@@ -7,7 +7,7 @@
   "files": [
     {
       "upstream": "shared/plugins/LICENSE",
-      "path": "vendor/LICENSE",
+      "path": "licenses/lithe-sdk-LICENSE",
       "sha256": "93ff573f89d32394501fcc82767e73b1824add861f088bbd3eec9e0afae20d21"
     },
     {

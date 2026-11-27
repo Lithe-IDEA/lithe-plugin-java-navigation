@@ -1,6 +1,6 @@
 // Package deps lets navigation follow names into a project's dependency
-// jars. It finds the jars of the Maven projects in a working tree in the
-// local repository (MavenJars) and the jars a tree keeps itself (TreeJars),
+// jars. It finds declared jars in the local Maven repository (MavenJars)
+// and Gradle cache (GradleJars), plus the jars a tree keeps itself (TreeJars),
 // lists the classes each one declares and,
 // for a class a lookup needs, returns Java source: the entry of the jar's
 // -sources.jar when it was downloaded, else a stub of signatures written

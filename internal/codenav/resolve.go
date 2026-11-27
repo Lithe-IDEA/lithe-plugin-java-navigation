@@ -523,8 +523,9 @@ func (q *qctx) staticMemberType(name string, f *File, wild bool) *Type {
 	return nil
 }
 
-// resolveText resolves a type as written ("Foo", "Outer.Inner", "a.b.Foo").
+// resolveText finds the declaration of a type or of an array's base type.
 func (q *qctx) resolveText(text string, f *File, ctx *Type) *Type {
+	text = strings.TrimRight(text, "[]")
 	if text == "" {
 		return nil
 	}
@@ -807,11 +808,11 @@ func (q *qctx) fieldInScope(name string, ctx *Type) *Member {
 	return nil
 }
 
-func (q *qctx) memberType(m *Member) *Type {
+func (q *qctx) memberType(m *Member) argType {
 	if m.Kind == kEnumConst {
-		return m.Owner
+		return resolvedType(m.Owner)
 	}
-	return q.resolveText(m.Type, m.Owner.File, m.Owner)
+	return q.declaredType(m.Type, m.Owner.File, m.Owner)
 }
 
 // ---- expressions ----
@@ -864,54 +865,59 @@ func (q *qctx) qualifiedType(ti int) *Type {
 	return q.lookupFQN(strings.Join(parts, "."), q.file)
 }
 
-// typeOfExpr infers the static type of the expression ending at token end.
+// typeOfExpr finds the declaration used for member lookup.
 func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
+	return q.exprType(end, ctx).t
+}
+
+// exprType infers the static type of the expression ending at token end.
+func (q *qctx) exprType(end int, ctx *Type) argType {
 	p := q.p
 	if end < 0 || q.depth > 16 {
-		return nil
+		return argType{}
 	}
 	q.depth++
 	defer func() { q.depth-- }()
 	switch {
 	case p.toks[end].Kind == tString: // "text".trim(), and text blocks
-		return q.impliedType("java.lang.String")
+		return argType{name: "String", t: q.impliedType("java.lang.String")}
 	case p.ident(end):
 		s := p.txt(end)
 		if p.is(end-1, ".") {
 			switch s {
 			case "this": // Outer.this
-				return q.resolveSimple(p.txt(end-2), q.file, ctx)
+				return resolvedType(q.resolveSimple(p.txt(end-2), q.file, ctx))
 			case "class": // Foo.class.getName()
-				return q.impliedType("java.lang.Class")
+				return argType{name: "Class", t: q.impliedType("java.lang.Class")}
 			case "super": // Iface.super.m(): the interface; Outer.super.m(): Outer's superclass
 				t := q.resolveSimple(p.txt(end-2), q.file, ctx)
 				if t == nil || t.Kind == kInterface {
-					return t
+					return resolvedType(t)
 				}
 				if ss := q.superTypes(t); len(ss) > 0 {
-					return ss[0]
+					return resolvedType(ss[0])
 				}
-				return nil
+				return argType{}
 			}
 			ot := q.typeOfExpr(end-2, ctx)
 			if ot == nil {
-				return q.qualifiedType(end)
+				return resolvedType(q.qualifiedType(end))
 			}
 			if m := q.findField(ot, s); m != nil {
 				return q.memberType(m)
 			}
-			return q.findNested(ot, s)
+			return resolvedType(q.findNested(ot, s))
 		}
 		switch s {
 		case "this":
-			return ctx
+			return resolvedType(ctx)
 		case "super":
 			if ctx != nil {
 				if ss := q.superTypes(ctx); len(ss) > 0 {
-					return ss[0]
+					return resolvedType(ss[0])
 				}
 			}
-			return nil
+			return argType{}
 		}
 		if l, ok := q.findLocal(s, end); ok {
 			return q.localType(l, ctx)
@@ -919,11 +925,11 @@ func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
 		if m := q.fieldInScope(s, ctx); m != nil {
 			return q.memberType(m)
 		}
-		return q.resolveSimple(s, q.file, ctx)
+		return resolvedType(q.resolveSimple(s, q.file, ctx))
 	case p.is(end, ")"):
 		open := q.matchBack(end)
 		if open < 0 {
-			return nil
+			return argType{}
 		}
 		before := open - 1
 		if p.is(before, ">") { // new Foo<>(...)
@@ -951,10 +957,10 @@ func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
 				for k := s; k <= before; k += 2 {
 					parts = append(parts, p.txt(k))
 				}
-				return q.resolveText(strings.Join(parts, "."), q.file, ctx)
+				return q.declaredType(strings.Join(parts, "."), q.file, ctx)
 			}
 			if nm == "this" || nm == "super" || javaKeywords[nm] && nm != "this" {
-				return nil
+				return argType{}
 			}
 			c := q.callAt(open)
 			var m *Member
@@ -966,48 +972,44 @@ func (q *qctx) typeOfExpr(end int, ctx *Type) *Type {
 				m = q.methodInScope(nm, c, ctx)
 			}
 			if m == nil {
-				return nil
+				return argType{}
 			}
 			if m.Ret != nil {
-				return m.Ret
+				return resolvedType(m.Ret)
 			}
 			if m.Kind == kField { // record/Lombok accessor
 				// A chained setter compiles only if it returns this
 				// (@Accessors(chain = true) or lombok.config).
 				if strings.HasPrefix(nm, "set") && nm != m.Name {
-					return m.Owner
+					return resolvedType(m.Owner)
 				}
-				return q.memberType(m)
 			}
-			return q.resolveText(m.Type, m.Owner.File, m.Owner)
+			return q.memberType(m)
 		}
-		// cast: ((Foo) x)
-		if p.is(open+1, "(") {
-			ce := p.skipBalanced(open + 1)
-			return q.resolveText(p.typeText(open+2, ce-1), q.file, ctx)
-		}
-		return q.typeOfExpr(end-1, ctx)
+		return q.argTypeOf(open+1, end, ctx)
 	case p.is(end, "]"):
 		open := q.matchBack(end)
-		return q.typeOfExpr(open-1, ctx) // element type: dims are not tracked
+		a := q.exprType(open-1, ctx)
+		a.name = strings.TrimSuffix(a.name, "[]")
+		return a
 	}
-	return nil
+	return argType{}
 }
 
-func (q *qctx) localType(l local, ctx *Type) *Type {
+func (q *qctx) localType(l local, ctx *Type) argType {
 	p := q.p
 	if l.typeS < 0 {
-		return nil
+		return argType{}
 	}
 	text := p.typeText(l.typeS, l.typ)
 	if text == "var" {
 		if p.is(l.tok+1, "=") {
 			e := p.skipExpr(l.tok + 2)
-			return q.typeOfExpr(e-1, ctx)
+			return q.argTypeOf(l.tok+2, e, ctx)
 		}
-		return nil
+		return argType{}
 	}
-	return q.resolveText(text, q.file, ctx)
+	return q.declaredType(p.declaratorType(text, l.tok+1), q.file, ctx)
 }
 
 // typeStartBack returns the first token of a type that ends at token e, or -1.
@@ -1144,7 +1146,7 @@ func (q *qctx) findLocal(name string, at int) (local, bool) {
 		if !p.ident(k) || javaKeywords[p.txt(k)] {
 			continue
 		}
-		nx := k + 1
+		nx, _ := p.arrayDimsEnd(k + 1)
 		ok := p.is(nx, "=") && !p.is(nx+1, "=") || p.is(nx, ";") || p.is(nx, ",") || p.is(nx, ")") || p.is(nx, ":")
 		if !ok && (p.is(nx, "&") || p.is(nx, "|") || p.is(nx, "?")) {
 			if ts := q.typeStartBack(k - 1); ts > 0 && p.is(ts-1, "instanceof") {
@@ -1159,9 +1161,9 @@ func (q *qctx) findLocal(name string, at int) (local, bool) {
 			te = k - 1
 		}
 		if ts := q.typeStartBack(te - 1); ts >= 0 {
-			add(k, ts, te)
+			add(k, ts, k)
 			if !p.is(nx, ")") && !p.is(nx, ":") {
-				multi, multiDepth = &local{k, ts, te}, depth
+				multi, multiDepth = &local{k, ts, k}, depth
 			}
 		} else if multi != nil && depth == multiDepth && p.is(k-1, ",") && !p.is(nx, ":") {
 			add(k, multi.typeS, multi.typ)

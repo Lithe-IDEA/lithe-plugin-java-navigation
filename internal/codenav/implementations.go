@@ -423,7 +423,7 @@ func methodsOverrideMatch(base, sub *Member) bool {
 	if base.Kind != kMethod || sub.Kind != kMethod || base.Name != sub.Name {
 		return false
 	}
-	if base.Arity != sub.Arity || base.Varargs != sub.Varargs {
+	if base.Arity != sub.Arity {
 		return false
 	}
 	if base.Params == sub.Params || base.Params == "" || sub.Params == "" {
@@ -438,8 +438,11 @@ func methodsOverrideMatch(base, sub *Member) bool {
 		if bParts[i] == sParts[i] {
 			continue
 		}
-		// Allow single-identifier generic type parameters (e.g. T -> String) in subclasses.
-		if isGenericTypeParam(bParts[i]) || isGenericTypeParam(sParts[i]) {
+		// Allow a type variable to stand for a substituted type, also as an array component.
+		bType, sType := bParts[i], sParts[i]
+		bElem, sElem := strings.TrimRight(bType, "[]"), strings.TrimRight(sType, "[]")
+		bDims, sDims := len(bType)-len(bElem), len(sType)-len(sElem)
+		if bDims <= sDims && isGenericTypeParam(bElem) || sDims <= bDims && isGenericTypeParam(sElem) {
 			continue
 		}
 		return false

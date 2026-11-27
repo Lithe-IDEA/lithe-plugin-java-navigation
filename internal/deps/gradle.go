@@ -2,12 +2,12 @@ package deps
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -28,16 +28,40 @@ func GradleJars(ctx context.Context, scripts []string, catalogPath string, logf 
 	repo := &localRepo{root: filepath.Join(home, "caches", "modules-2", "files-2.1"), gradle: true, versions: map[string][]string{}}
 	m := newMaven(ctx, repo, logf)
 	catalog := readGradleCatalog(catalogPath, m.logf)
-	root := &model{}
+	var primary, extra []*model
 	for _, p := range scripts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if src := readGradleFile(p); src != "" {
-			root.deps = append(root.deps, gradleDeclarations(src, catalog)...)
+			groups := gradleDeclarations(src, catalog)
+			base := groups[""]
+			if len(base) > 0 {
+				primary = append(primary, &model{deps: base})
+			}
+			delete(groups, "")
+			for _, configuration := range slices.Sorted(maps.Keys(groups)) {
+				extra = append(extra, &model{deps: groups[configuration]})
+			}
 		}
 	}
-	return m.resolveGradle(root)
+	// The workspace uses one ordered index. Keep production compile jars
+	// first, then add jars from other configurations without evicting them.
+	var jars []Jar
+	seen := make(map[string]bool)
+	for _, root := range append(primary, extra...) {
+		resolved, err := m.resolveGradle(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, jar := range resolved {
+			if !seen[jar.Path] {
+				jars = append(jars, jar)
+				seen[jar.Path] = true
+			}
+		}
+	}
+	return jars, nil
 }
 
 // A higher request can be discovered after the lower version's POM has
@@ -48,16 +72,22 @@ func (m *maven) resolveGradle(root *model) ([]Jar, error) {
 		version string
 		strict  bool
 	}
-	var previous map[string]selection
+	better := func(a, b selection) bool {
+		if a.strict != b.strict {
+			return a.strict
+		}
+		return compareVersions(a.version, b.version) > 0
+	}
+	var previous, beforePrevious map[string]selection
 	const maxConflictPasses = 32
-	for range maxConflictPasses {
+	for pass := 1; ; pass++ {
 		requests := map[string]selection{}
 		used := map[string]selection{}
 		choose := func(dep pomDep, version string) string {
 			key := gaOf(dep)
 			want := selection{version, dep.strict}
 			old, ok := requests[key]
-			if !ok || (want.strict && !old.strict) || (want.strict == old.strict && compareVersions(version, old.version) > 0) {
+			if !ok || better(want, old) {
 				requests[key] = want
 			}
 			if _, ok := used[key]; !ok {
@@ -73,9 +103,24 @@ func (m *maven) resolveGradle(root *model) ([]Jar, error) {
 		if err != nil || maps.Equal(used, requests) {
 			return jars, err
 		}
-		previous = requests
+		if pass == maxConflictPasses || maps.Equal(beforePrevious, requests) {
+			// Cross-upgrading POMs may remove the requests that selected
+			// them. Pin the winners of both walks for one final traversal.
+			for key, chosen := range used {
+				if better(chosen, requests[key]) {
+					requests[key] = chosen
+				}
+			}
+			m.logf("Gradle version requests did not stabilize; indexing the selected cached versions")
+			return m.resolve([]*model{root}, func(dep pomDep, version string) string {
+				if winner, ok := requests[gaOf(dep)]; ok {
+					return winner.version
+				}
+				return version
+			})
+		}
+		beforePrevious, previous = previous, requests
 	}
-	return nil, fmt.Errorf("Gradle dependency versions did not converge after %d passes", maxConflictPasses)
 }
 
 // Gradle accepts both Maven-style open bounds and the reversed-bracket form.
@@ -147,10 +192,10 @@ func (s *gradleTokens) next() string {
 	}
 }
 
-func gradleDeclarations(script string, catalog map[string]pomDep) []pomDep {
+func gradleDeclarations(script string, catalog map[string]pomDep) map[string][]pomDep {
 	tokens := gradleTokens(script)
 	var blocks []string
-	var out []pomDep
+	out := make(map[string][]pomDep)
 	buildscript := 0
 	prev := ""
 	for tok := tokens.next(); tok != ""; tok = tokens.next() {
@@ -171,7 +216,12 @@ func gradleDeclarations(script string, catalog map[string]pomDep) []pomDep {
 			inDeps := buildscript == 0 && len(blocks) > 0 && blocks[len(blocks)-1] == "dependencies"
 			if inDeps && gradleConfiguration.MatchString(tok) {
 				if dep := gradleArgument(tokens, catalog); dep.ArtifactID != "" {
-					out = append(out, dep)
+					group := tok
+					switch tok {
+					case "api", "implementation", "compileOnly", "compile":
+						group = ""
+					}
+					out[group] = append(out[group], dep)
 				}
 			}
 		}

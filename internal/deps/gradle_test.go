@@ -29,6 +29,18 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 		<groupId>org.example</groupId><artifactId>nested</artifactId><version>2</version>
 	</dependency></dependencies></project>`)
 	nested := put("nested", "2", ".jar", "")
+	put("nested", "1", ".jar", "")
+	put("nested", "1", ".pom", `<project><dependencies><dependency>
+		<groupId>org.example</groupId><artifactId>evicted-child</artifactId><version>1</version>
+	</dependency></dependencies></project>`)
+	put("evicted-child", "1", ".jar", "")
+	testNested := put("nested", "3", ".jar", "")
+	for _, pair := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		put(pair[0], "1", ".jar", "")
+		put(pair[0], "1", ".pom", `<project><dependencies><dependency><groupId>org.example</groupId><artifactId>`+pair[1]+`</artifactId><version>2</version></dependency></dependencies></project>`)
+	}
+	a := put("a", "2", ".jar", "")
+	b := put("b", "2", ".jar", "")
 	sources := put("nested", "2", "-sources.jar", "")
 	put("unused", "1", ".jar", "")
 	put("pinned", "2", ".jar", "")
@@ -52,6 +64,9 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 		implementation 'org.example:nested:1'
 		api 'org.example:ranged:[1.0,2.0)'
 		implementation libs.strict
+		testRuntimeOnly 'org.example:nested:3'
+		api 'org.example:a:1'
+		api 'org.example:b:1'
 		testImplementation("org.example:pinned:1")
 		// runtimeOnly 'org.example:unused:1'
 		/* compileOnly("org.example:unused:1") */
@@ -68,6 +83,9 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 		{Coord: "org.example:nested:2", Path: nested, Sources: sources},
 		{Coord: "org.example:ranged:1.9", Path: ranged},
 		{Coord: "org.example:strict:2", Path: strict},
+		{Coord: "org.example:a:2", Path: a},
+		{Coord: "org.example:b:2", Path: b},
+		{Coord: "org.example:nested:3", Path: testNested},
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("GradleJars = %+v, %v; want %+v", got, err, want)

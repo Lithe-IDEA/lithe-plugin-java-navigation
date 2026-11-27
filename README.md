@@ -44,7 +44,7 @@
   某个类第一次被查到时才读它的源码或生成存根；跳进去时把那一个文件写成只读副本，放在 `${stateDir}/dependency-sources`，
   不写本地仓库。
 - Gradle 项目从 `build.gradle`、`build.gradle.kts` 的 `dependencies` 块读取常用 Java 配置中的字面量坐标和 `libs.*` 引用。别名来自工作区根的 `gradle/libs.versions.toml`。
-  在 `${GRADLE_USER_HOME:-~/.gradle}/caches/modules-2/files-2.1` 查找 JAR、源码包和传递依赖的 POM。普通版本请求冲突时取较高版本，再按该版本的 POM 选取传递依赖。支持版本目录中的 `strictly` 和 `require`，以及从缓存选择满足单个版本区间的最高版本。省略版本时取本地缓存的最高版本，选定版本未下载时跳过。仅有 Gradle Module Metadata、没有 POM 的依赖目前只能索引自身。
+  在 `${GRADLE_USER_HOME:-~/.gradle}/caches/modules-2/files-2.1` 查找 JAR、源码包和传递依赖的 POM。按构建脚本分别解析，主编译配置优先进入工作区的共享索引，测试和运行时配置补充索引。相同类名优先使用先进入索引的版本，目前不会根据光标所在模块或源集切换类路径。普通版本请求冲突时取较高版本，再按该版本的 POM 选取传递依赖。支持版本目录中的 `strictly` 和 `require`，以及从缓存选择满足单个版本区间的最高版本。省略版本时取本地缓存的最高版本，选定版本未下载时跳过。仅有 Gradle Module Metadata、没有 POM 的依赖目前只能索引自身。
 - 工作区里的 jar：先按每个 Eclipse `.classpath` 的 `lib` 条目和 `M2_REPO` 变量条目的顺序，再加上路径往上三层内
   有 `lib` 或 `libs` 目录的 jar（`WEB-INF/lib`、`lib/optional` 都算；测试资源里的 jar、`gradle-wrapper.jar`、
   `target`/`build` 里的不算）；工作区根目录和每个 `build.xml`、`.classpath`、`.project` 所在目录下的 `lib`、

@@ -45,6 +45,19 @@ const backend = manifest.backend;
 if (backend?.launch?.kind !== "packaged" || backend?.launch?.path !== `bin/${BINARY}`) {
   problems.push(`plugin.json must declare a packaged backend at bin/${BINARY}`);
 }
+const permissions = new Set(Array.isArray(manifest.permissions) ? manifest.permissions : []);
+if (servers.length > 0 && !permissions.has("languageServer.launch")) {
+  problems.push('plugin.json declares languageServers without "languageServer.launch" permission');
+}
+if (servers.some((s) => (s.requestMethods?.length ?? 0) > 0 || (s.forwardNotifications?.length ?? 0) > 0) && !permissions.has("languageServer.request")) {
+  problems.push('plugin.json exposes language server requests/notifications without "languageServer.request" permission');
+}
+if (backend && !permissions.has("backend.launch")) {
+  problems.push('plugin.json declares backend without "backend.launch" permission');
+}
+if ((permissions.has("editor.actions") || permissions.has("editor.providers")) && !permissions.has("documents.read")) {
+  problems.push('plugin.json declares "editor.actions" or "editor.providers" without required "documents.read" permission');
+}
 
 const tagFlag = process.argv.indexOf("--expect-tag");
 if (tagFlag >= 0) {

@@ -35,6 +35,10 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 	</dependency></dependencies></project>`)
 	put("evicted-child", "1", ".jar", "")
 	testNested := put("nested", "3", ".jar", "")
+	put("assertions", "1", ".jar", "")
+	assertions := put("assertions", "2", ".jar", "")
+	put("shared", "1", ".jar", "")
+	shared := put("shared", "2", ".jar", "")
 	for _, pair := range [][2]string{{"a", "b"}, {"b", "a"}} {
 		put(pair[0], "1", ".jar", "")
 		put(pair[0], "1", ".pom", `<project><dependencies><dependency><groupId>org.example</groupId><artifactId>`+pair[1]+`</artifactId><version>2</version></dependency></dependencies></project>`)
@@ -57,7 +61,16 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 	`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(t.TempDir(), "build.gradle")
+	root := t.TempDir()
+	rootScript := filepath.Join(root, "build.gradle")
+	if err := os.WriteFile(rootScript, []byte("subprojects { dependencies { implementation 'org.example:shared:1' } }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(root, "service")
+	if err := os.Mkdir(module, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(module, "build.gradle")
 	body := `buildscript { dependencies { implementation 'org.example:unused:1' } }
 	dependencies {
 		implementation 'org.example:starter'
@@ -67,6 +80,9 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 		testRuntimeOnly 'org.example:nested:3'
 		api 'org.example:a:1'
 		api 'org.example:b:1'
+		implementation 'org.example:shared:2'
+		testCompileOnly 'org.example:assertions:1'
+		testImplementation 'org.example:assertions:2'
 		testImplementation("org.example:pinned:1")
 		// runtimeOnly 'org.example:unused:1'
 		/* compileOnly("org.example:unused:1") */
@@ -77,7 +93,7 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := GradleJars(ctx(t), []string{script}, catalog, t.Logf)
+	got, err := GradleJars(ctx(t), []string{rootScript, script}, catalog, t.Logf)
 	want := []Jar{
 		{Coord: "org.example:starter:1.10", Path: starter},
 		{Coord: "org.example:nested:2", Path: nested, Sources: sources},
@@ -85,6 +101,8 @@ func TestGradleJarsFollowOnlyDeclaredDependencies(t *testing.T) {
 		{Coord: "org.example:strict:2", Path: strict},
 		{Coord: "org.example:a:2", Path: a},
 		{Coord: "org.example:b:2", Path: b},
+		{Coord: "org.example:shared:2", Path: shared},
+		{Coord: "org.example:assertions:2", Path: assertions},
 		{Coord: "org.example:nested:3", Path: testNested},
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {

@@ -28,21 +28,40 @@ func GradleJars(ctx context.Context, scripts []string, catalogPath string, logf 
 	repo := &localRepo{root: filepath.Join(home, "caches", "modules-2", "files-2.1"), gradle: true, versions: map[string][]string{}}
 	m := newMaven(ctx, repo, logf)
 	catalog := readGradleCatalog(catalogPath, m.logf)
-	var primary, extra []*model
+	projects := make(map[string]gradleProject)
+	var directories []string
 	for _, p := range scripts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if src := readGradleFile(p); src != "" {
-			groups := gradleDeclarations(src, catalog)
-			base := groups[""]
-			if len(base) > 0 {
-				primary = append(primary, &model{deps: base})
+		dir := filepath.Dir(p)
+		if _, ok := projects[dir]; !ok {
+			directories = append(directories, dir)
+			projects[dir] = gradleDeclarations(readGradleFile(p), catalog)
+		}
+	}
+	var primary, extra []*model
+	for _, dir := range directories {
+		groups := projects[dir].own
+		for child := dir; filepath.Dir(child) != child; child = filepath.Dir(child) {
+			// A nested build with its own settings does not inherit the
+			// outer build's subprojects declarations.
+			if _, err := os.Stat(filepath.Join(child, "settings.gradle")); err == nil {
+				break
 			}
-			delete(groups, "")
-			for _, configuration := range slices.Sorted(maps.Keys(groups)) {
-				extra = append(extra, &model{deps: groups[configuration]})
+			if _, err := os.Stat(filepath.Join(child, "settings.gradle.kts")); err == nil {
+				break
 			}
+			for group, shared := range projects[filepath.Dir(child)].children {
+				groups[group] = append(groups[group], shared...)
+			}
+		}
+		if base := groups[""]; len(base) > 0 {
+			primary = append(primary, &model{deps: base})
+		}
+		delete(groups, "")
+		for _, configuration := range slices.Sorted(maps.Keys(groups)) {
+			extra = append(extra, &model{deps: groups[configuration]})
 		}
 	}
 	// The workspace uses one ordered index. Keep production compile jars
@@ -192,10 +211,14 @@ func (s *gradleTokens) next() string {
 	}
 }
 
-func gradleDeclarations(script string, catalog map[string]pomDep) map[string][]pomDep {
+type gradleProject struct {
+	own, children map[string][]pomDep
+}
+
+func gradleDeclarations(script string, catalog map[string]pomDep) gradleProject {
 	tokens := gradleTokens(script)
 	var blocks []string
-	out := make(map[string][]pomDep)
+	out := gradleProject{own: make(map[string][]pomDep), children: make(map[string][]pomDep)}
 	buildscript := 0
 	prev := ""
 	for tok := tokens.next(); tok != ""; tok = tokens.next() {
@@ -220,8 +243,16 @@ func gradleDeclarations(script string, catalog map[string]pomDep) map[string][]p
 					switch tok {
 					case "api", "implementation", "compileOnly", "compile":
 						group = ""
+					case "testCompile", "testApi", "testCompileOnly", "testImplementation":
+						group = "testCompileClasspath"
 					}
-					out[group] = append(out[group], dep)
+					sub := slices.Contains(blocks, "subprojects")
+					if !sub {
+						out.own[group] = append(out.own[group], dep)
+					}
+					if sub || slices.Contains(blocks, "allprojects") {
+						out.children[group] = append(out.children[group], dep)
+					}
 				}
 			}
 		}

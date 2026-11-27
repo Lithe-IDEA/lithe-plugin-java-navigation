@@ -37,9 +37,9 @@ import (
 // MaxEntrySize skips class files and sources too large to read.
 const MaxEntrySize = 4 << 20
 
-// stubFormat names the output of the stub writer; change it with the writer,
+// StubFormat names the output of the stub writer; change it with the writer,
 // so copies extracted by an older version are not reused.
-const stubFormat = "1"
+const StubFormat = "1"
 
 // ErrChanged reports a jar that changed since it was listed.
 var ErrChanged = errors.New("the dependency jar changed on disk")
@@ -179,7 +179,7 @@ func (a *archive) list() ([]string, error) {
 	a.size, a.mod = fi.Size(), fi.ModTime()
 	id := a.file + "\x00" + strconv.FormatInt(a.size, 10) + "\x00" + a.mod.UTC().Format(time.RFC3339Nano)
 	if !a.sources {
-		id += "\x00stub " + stubFormat // a new stub writer never reuses older copies
+		id += "\x00stub " + StubFormat // a new stub writer never reuses older copies
 	}
 	h := sha256.Sum256([]byte(id))
 	a.dir = sanitize(strings.ReplaceAll(a.Coord, ":", "_")) + "-" + hex.EncodeToString(h[:6])
@@ -264,6 +264,12 @@ func (s *Set) Read(p string) ([]byte, error) {
 		return read(entry)
 	}
 	stem := strings.TrimSuffix(entry, ".java")
+	return ClassStub(filepath.Base(a.Path), stem, read, func(name string) bool { return files[name] != nil })
+}
+
+// ClassStub renders the signatures of a top-level class and its member classes.
+// Both the dependency and JDK readers supply archive-relative .class entries.
+func ClassStub(origin, stem string, read func(string) ([]byte, error), has func(string) bool) ([]byte, error) {
 	b, err := read(stem + ".class")
 	if err != nil {
 		return nil, err
@@ -280,8 +286,8 @@ func (s *Set) Read(p string) ([]byte, error) {
 		c, err := parseClass(b)
 		return c, err == nil
 	}
-	exists := func(binary string) bool { return files[binary+".class"] != nil }
-	return writeStub(top, filepath.Base(a.Path), load, exists), nil
+	exists := func(binary string) bool { return has(binary + ".class") }
+	return writeStub(top, origin, load, exists), nil
 }
 
 // CacheDir is the directory under state that holds the copies of the sources

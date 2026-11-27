@@ -13,8 +13,8 @@
 //     copy on disk, and the document a query comes from is parsed from that
 //     text again.
 //
-// Names the folder does not declare resolve into the JDK's sources when a JDK
-// with sources is installed, and into the locally cached jars of the folder's Maven
+// Names the folder does not declare resolve into the JDK's sources (or Java 8
+// runtime signatures), and into the locally cached jars of the folder's Maven
 // and Gradle dependencies (package deps). Their
 // declarations are extracted, one file at a time, into read-only copies
 // under the state directory, which the editor opens as ordinary files; a
@@ -621,8 +621,12 @@ func (w *Workspace) runScan(run *scanRun) {
 			w.sources = found
 			changed = true
 		}
-		if w.sources != nil {
-			w.opt.Logf("JDK sources: %s (%s)", w.sources.Archive(), w.sources.Version())
+		if found != nil {
+			label := "JDK sources"
+			if found.UsesStubs() {
+				label = "JDK declaration stubs"
+			}
+			w.opt.Logf("%s: %s (%s)", label, found.Archive(), found.Version())
 		}
 	}
 	if lookDeps {

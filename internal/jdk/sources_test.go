@@ -45,7 +45,7 @@ func TestSourcesExtractAndMapBack(t *testing.T) {
 		"java.base/module-info.java":      "module java.base {}\n",
 		"README":                          "not a source",
 	})
-	s, err := Open(JDK{Version: "17.0.18", Sources: archive})
+	s, err := Open(JDK{Version: "17.0.18", Archive: archive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestSourcesExtractAndMapBack(t *testing.T) {
 func TestSourcesNoticeAReplacedArchive(t *testing.T) {
 	dir := t.TempDir()
 	archive := writeZip(t, dir, map[string]string{"java/lang/Object.java": "package java.lang;\npublic class Object {}\n"})
-	s, err := Open(JDK{Sources: archive})
+	s, err := Open(JDK{Archive: archive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestSourcesNoticeAReplacedArchive(t *testing.T) {
 	if _, err := s.Read("java/lang/Object.java"); !errors.Is(err, ErrChanged) {
 		t.Errorf("read of a replaced archive = %v, want ErrChanged", err)
 	}
-	s2, err := Open(JDK{Sources: archive})
+	s2, err := Open(JDK{Archive: archive})
 	if err != nil {
 		t.Fatal(err)
 	}

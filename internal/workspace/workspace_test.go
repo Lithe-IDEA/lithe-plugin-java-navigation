@@ -227,7 +227,48 @@ func fakeJDK(t *testing.T, files map[string]string) func(context.Context) (jdk.J
 		t.Fatal(err)
 	}
 	f.Close()
-	return func(context.Context) (jdk.JDK, bool) { return jdk.JDK{Version: "17.0.18", Sources: p}, true }
+	return func(context.Context) (jdk.JDK, bool) { return jdk.JDK{Version: "17.0.18", Archive: p}, true }
+}
+
+func TestDefinitionIntoRuntimeJarWithoutSources(t *testing.T) {
+	// Reuse actual class files, including a member class, without requiring
+	// javac or redistributing a JDK in the test suite.
+	b, err := os.ReadFile(filepath.Join("..", "deps", "testdata", "fixture", "lib-1.0.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := filepath.Join(t.TempDir(), "rt.jar")
+	if err := os.WriteFile(rt, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	src := "import com.example.lib.Container;\nclass App { int f(Container<?> box) { return box.size(); } }"
+	write(t, root, map[string]string{"App.java": src})
+	w := newTestWorkspace(t, root, func(context.Context) (jdk.JDK, bool) {
+		return jdk.JDK{Version: "1.8.0_512", Archive: rt}, true
+	})
+	doc := w.DocOf(filepath.Join(root, "App.java"))
+	for _, tc := range []struct{ use, declaration string }{
+		{"Container<?>", "public class Container<E>"},
+		{"size()", "public int size()"},
+	} {
+		target, ok, err := w.Definition(ctx(t), doc, []byte(src), at(t, src, tc.use, 0, 1))
+		if err != nil || !ok {
+			t.Fatalf("definition of %s = %+v, %v", tc.use, target, err)
+		}
+		if got := w.DocOf(target.File).Library; got != "com/example/lib/Container.java" {
+			t.Fatalf("DocOf(%s) = %s", target.File, got)
+		}
+		body, err := os.ReadFile(target.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(body), "\n")
+		if target.Line >= len(lines) || !strings.Contains(lines[target.Line], tc.declaration) ||
+			!strings.Contains(lines[0], "Signatures read from rt.jar") || !strings.Contains(string(body), "class Builder") {
+			t.Fatalf("incorrect stub or target for %s: %+v\n%s", tc.use, target, body)
+		}
+	}
 }
 
 func TestDefinitionIntoTheJDKAndBack(t *testing.T) {

@@ -13,20 +13,17 @@ import (
 	"time"
 )
 
-// JDK is an installed Java Development Kit that ships its class library's
-// sources, which go to declaration reads (ADR 0041).
+// JDK describes an installation with navigable standard library declarations.
 type JDK struct {
 	Home    string // the JDK's home directory
 	Version string // JAVA_VERSION from its release file; "" if unknown
-	Sources string // the src.zip inside Home
+	Archive string // src.zip, or the Java 8 runtime's rt.jar
 }
 
-// FindJDK returns the JDK whose sources navigation uses: the one the user
-// chose (JAVA_HOME, then the system default: macOS's java_home, or the java
-// on PATH elsewhere) when it has sources, otherwise the newest installed JDK
-// that has them. It reports false when no JDK with sources is installed; a
-// JRE, or a JDK packaged without src.zip (some Linux distributions split it
-// into a separate package), does not count.
+// FindJDK looks for declarations in JAVA_HOME, then the system default JDK,
+// then the newest usable installation. A Java 8 runtime with rt.jar is usable
+// even without sources, so its declarations take precedence over a different
+// JDK's APIs.
 //
 // It reads environment variables, starts at most one short-lived process
 // (macOS) and lists a few well-known install directories; it does not search
@@ -36,8 +33,8 @@ func FindJDK(ctx context.Context) (JDK, bool) {
 	return pickJDK(jdkPreferred(ctx), jdkInstalled(runtime.GOOS, home, os.Getenv))
 }
 
-// pickJDK returns the first preferred home with sources, else the installed
-// home with sources and the highest version (the lexically first path among
+// pickJDK returns the first usable preferred home, else the installed
+// usable home with the highest version (the lexically first path among
 // equals, so the choice is stable).
 func pickJDK(preferred, installed []string) (JDK, bool) {
 	for _, h := range preferred {
@@ -49,10 +46,10 @@ func pickJDK(preferred, installed []string) (JDK, bool) {
 	seen := map[string]bool{}
 	for _, h := range installed {
 		j, ok := jdkAt(h)
-		if !ok || seen[j.Sources] {
+		if !ok || seen[j.Archive] {
 			continue
 		}
-		seen[j.Sources] = true
+		seen[j.Archive] = true
 		found = append(found, j)
 	}
 	if len(found) == 0 {
@@ -67,9 +64,7 @@ func pickJDK(preferred, installed []string) (JDK, bool) {
 	return found[0], true
 }
 
-// jdkAt describes the JDK at home if it has sources: lib/src.zip since JDK 9,
-// src.zip in the home directory before. A JDK 8 java executable lives in
-// jre/bin, so a home ending in "jre" is retried one level up.
+// jdkAt checks the source archive first, then pre-modular runtime layouts.
 func jdkAt(home string) (JDK, bool) {
 	if home == "" {
 		return JDK{}, false
@@ -80,11 +75,21 @@ func jdkAt(home string) (JDK, bool) {
 	for _, rel := range []string{filepath.Join("lib", "src.zip"), "src.zip"} {
 		p := filepath.Join(home, rel)
 		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			return JDK{Home: home, Version: releaseVersion(home), Sources: p}, true
+			return JDK{Home: home, Version: releaseVersion(home), Archive: p}, true
 		}
 	}
 	if filepath.Base(home) == "jre" {
-		return jdkAt(filepath.Dir(home))
+		// java may live in <jdk>/jre/bin. Prefer the enclosing JDK's
+		// archive (and its release metadata) over the embedded runtime.
+		if j, ok := jdkAt(filepath.Dir(home)); ok {
+			return j, true
+		}
+	}
+	for _, rel := range []string{filepath.Join("jre", "lib", "rt.jar"), filepath.Join("lib", "rt.jar")} {
+		p := filepath.Join(home, rel)
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			return JDK{Home: home, Version: releaseVersion(home), Archive: p}, true
+		}
 	}
 	return JDK{}, false
 }

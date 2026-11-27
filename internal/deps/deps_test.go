@@ -370,24 +370,21 @@ func TestLocalRepositoryHonoursSettings(t *testing.T) {
 func TestMavenCompilerExecutable(t *testing.T) {
 	root := t.TempDir()
 	child := filepath.Join(root, "module")
-	if err := os.Mkdir(child, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	exe := filepath.Join(root, "jdk 8", "bin", "javac")
 	t.Setenv("TEST_MAVEN_JAVAC", exe)
-	parent := `<project><artifactId>parent</artifactId><build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><fork>true</fork><executable>${compiler}</executable></configuration></plugin></plugins></build></project>`
-	module := `<project><parent><artifactId>parent</artifactId></parent><properties><compiler>${env.TEST_MAVEN_JAVAC}</compiler></properties></project>`
-	for dir, pom := range map[string]string{root: parent, child: module} {
-		if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte(pom), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	parent := `<project><groupId>example</groupId><artifactId>parent</artifactId><version>1</version><build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration><fork>true</fork><executable>${compiler}</executable></configuration></plugin></plugins></build></project>`
+	module := `<project><parent><groupId>example</groupId><artifactId>parent</artifactId><version>1</version></parent><properties><compiler>${env.TEST_MAVEN_JAVAC}</compiler></properties></project>`
+	writeFile(t, filepath.Join(root, "pom.xml"), parent)
+	pom := filepath.Join(child, "pom.xml")
+	writeFile(t, pom, module)
 	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != exe {
 		t.Fatalf("got %q, want %q", got, exe)
 	}
-	if err := os.WriteFile(filepath.Join(child, "pom.xml"), []byte(`<project><properties><maven.compiler.release>8</maven.compiler.release><maven.compiler.executable>${env.TEST_MAVEN_JAVAC}</maven.compiler.executable></properties></project>`), 0o644); err != nil {
-		t.Fatal(err)
+	writeFile(t, pom, strings.Replace(module, "<version>1", "<version>2", 1))
+	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != "" {
+		t.Fatalf("unrelated local parent selected %q", got)
 	}
+	writeFile(t, pom, `<project><properties><maven.compiler.release>8</maven.compiler.release><maven.compiler.executable>${env.TEST_MAVEN_JAVAC}</maven.compiler.executable></properties></project>`)
 	if got := MavenCompilerExecutable(t.Context(), child, t.Logf); got != "" {
 		t.Fatalf("unforked compiler selected %q", got)
 	}

@@ -3,6 +3,7 @@ package deps
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -147,6 +148,13 @@ func MavenCompilerExecutable(ctx context.Context, root string, logf func(string,
 		}
 		pom = m.localParent(pom, p)
 		if pom == "" {
+			break
+		}
+		// A relative path can point at another version of the parent checked
+		// out alongside this module. Maven won't inherit its compiler.
+		parent := m.readPOM(pom)
+		if cmp.Or(parent.GroupID, parent.Parent.GroupID) != p.Parent.GroupID ||
+			cmp.Or(parent.Version, parent.Parent.Version) != p.Parent.Version {
 			break
 		}
 	}
